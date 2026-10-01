@@ -35,10 +35,10 @@ Output goes into an automatically built version directory (nothing to type per s
 
 ```
 {projects_root}/{ProjectFolder}/VFX/{PROJ}_{SEQ}/{PROJ}_{SHOT}/Tasks/{TaskFolder}/ComfyUI/{element}/{PROJ}_{SHOT}_{task}_v{VER}/
-T:\Volumes\Projects\GodOfTides\VFX\GOD_0046\GOD_0046_005\Tasks\MachineLearning\ComfyUI\water\GOD_0046_005_ml_v001\
+P:\Projects\MyProject\VFX\PROJ_0010\PROJ_0010_020\Tasks\Compositing\ComfyUI\fx\PROJ_0010_020_comp_v001\
 ```
 
-`SEQ` is the first `_` part of the shot (`0046_005` -> `0046`, zeros kept). Roots and code -> folder
+`SEQ` is the first `_` part of the shot (`0010_020` -> `0010`, zeros kept). Roots and code -> folder
 mappings live in a TOML settings file. Defaults ship inside the package (`src/shot2exr/default_settings.toml`);
 your overrides go in the user file, which tables are merged into key by key:
 
@@ -51,16 +51,16 @@ your overrides go in the user file, which tables are merged into key by key:
 
 ```toml
 [paths.windows]
-projects_root = "T:/Volumes/Projects"
+projects_root = "P:/Projects"
 
 [paths.linux]
 projects_root = "/your/production/mount"   # empty by default: Shot2EXR refuses to guess
 
 [projects]
-GOD = "GodOfTides"
+PROJ = "MyProject"
 
 [tasks]
-ml = "MachineLearning"
+comp = "Compositing"
 ```
 
 The GUI's *Settings...* button edits the projects root for the current OS. Add projects and tasks to the
@@ -73,7 +73,7 @@ and a non-empty existing version directory is refused unless overwrite is enable
 ```bash
 shot2exr --inspect --input "/source/clip.mov"          # metadata + colour detection only
 
-shot2exr --input "/source/clip.mov" --project GOD --shot 0046_005 --task ml --element water \
+shot2exr --input "/source/clip.mov" --project PROJ --shot 0010_020 --task comp --element fx \
   --version 001 --start-frame 1009 --resolution 2048x1152 \
   --input-colorspace auto --output-colorspace ACEScg --dry-run
 ```
