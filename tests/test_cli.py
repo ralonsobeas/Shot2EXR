@@ -34,10 +34,21 @@ def test_inferred_needs_flag_in_cli(make_video, tmp_path, capsys):
     assert main(_args(src, tmp_path, "--dry-run", "--accept-inferred-colorspace")) == ExitCode.OK
 
 
-def test_conversion_not_implemented_yet(make_exr_sequence, tmp_path):
-    src = make_exr_sequence([1], attrs={"colorInteropID": "lin_ap1_scene"})
-    assert main(_args(src, tmp_path)) == ExitCode.NOT_IMPLEMENTED
-    assert not any(p.suffix == ".exr" for p in tmp_path.iterdir())
+def test_video_conversion_not_implemented_yet(make_video, tmp_path):
+    out = tmp_path / "out"
+    out.mkdir()
+    src = make_video("clip.mov", frames=3)
+    assert main(_args(src, out, "--accept-inferred-colorspace")) == ExitCode.NOT_IMPLEMENTED
+    assert list(out.iterdir()) == []
+
+
+def test_cli_exr_conversion(make_exr_sequence, tmp_path, capsys):
+    src = make_exr_sequence([1, 2], attrs={"colorInteropID": "lin_ap1_scene"})
+    out = tmp_path / "out"
+    assert main(_args(src, out, "--resolution", "64x36")) == ExitCode.OK
+    assert sorted(p.name for p in out.iterdir()) == [
+        "GOD_0046_005_ml_v001.1009.exr", "GOD_0046_005_ml_v001.1010.exr", "GOD_0046_005_ml_v001.conversion_report.json"]
+    assert "SUCCESS: 2 frame(s)" in capsys.readouterr().out
 
 
 def test_inspect_and_errors(make_exr_sequence, tmp_path, capsys):

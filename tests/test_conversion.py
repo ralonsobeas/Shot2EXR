@@ -26,7 +26,7 @@ def test_exr_plan_ok(ocio_cfg, make_exr_sequence, tmp_path):
     assert plan.frame_range == (1009, 1012)
     assert plan.output_filenames() == [f"GOD_0046_005_ml_v001.{f}.exr" for f in range(1009, 1013)]
     assert plan.input_colorspace == "ACEScg" and plan.input_colorspace_origin == "detected"
-    assert plan.color_transforms == ["none (input and output are both 'ACEScg')"]
+    assert len(plan.color_transforms) == 1 and plan.color_transforms[0].startswith("resize (lanczos3, in 'ACEScg')")
     assert list(out.iterdir()) == []  # dry run writes nothing
     d = plan.to_dict()
     assert d["output"]["end_frame"] == 1012 and d["color"]["manual_override"] is False
@@ -47,7 +47,7 @@ def test_unknown_requires_manual_and_override_is_recorded(ocio_cfg, make_exr_seq
     assert plan.ok and plan.input_colorspace == "Linear Rec.709 (sRGB)" and plan.input_colorspace_origin == "manual"
     src2 = make_exr_sequence([1, 2], name="tagged", attrs={"colorInteropID": "lin_ap1_scene"}, directory=tmp_path / "t")
     plan = plan_conversion(_req(src2, tmp_path, input_colorspace="ACES2065-1"), ocio_cfg)
-    assert plan.manual_override and plan.color_transforms == ["OCIO: 'ACES2065-1' -> 'ACEScg'"]
+    assert plan.manual_override and plan.color_transforms[-1] == "OCIO 'ACES2065-1' -> 'ACEScg'"
 
 
 def test_invalid_colorspace_names_are_not_substituted(ocio_cfg, make_exr_sequence, tmp_path):

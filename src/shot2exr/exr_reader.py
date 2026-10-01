@@ -84,3 +84,55 @@ def read_header(path: Path) -> ExrHeader:
         )
     finally:
         inp.close()
+
+
+@dataclass
+class Frame:
+    """Float32 pixels of the display window, shape (height, width, channels); RGB or RGBA."""
+
+    pixels: Any
+    channels: list[str]
+
+    @property
+    def has_alpha(self) -> bool:
+        return self.channels[-1] == "A"
+
+
+def read_frame(path: Path, want_alpha: bool = True) -> Frame:
+    """Read one EXR frame as float32 RGB(A), resolved to the display window.
+
+    Pixels of the data window outside the display window are discarded; display-window areas
+    not covered by the data window are zero (transparent black), as OpenEXR defines.
+    """
+    import numpy as np
+
+    oiio = _oiio()
+    inp = oiio.ImageInput.open(str(path))
+    if inp is None:
+        raise InputError(f"Cannot open {path.name}: {oiio.geterror() or 'unknown error'}")
+    try:
+        spec = inp.spec()
+        names = list(spec.channelnames)
+        missing = [c for c in ("R", "G", "B") if c not in names]
+        if missing:
+            raise InputError(f"{path.name} has no {'/'.join(missing)} channel(s) (channels: {', '.join(names)}).")
+        wanted = ["R", "G", "B"] + (["A"] if want_alpha and "A" in names else [])
+        data = inp.read_image(0, 0, 0, spec.nchannels, "float")
+        if data is None:
+            raise InputError(f"Cannot read pixels of {path.name}: {inp.geterror() or 'unknown error'}")
+    finally:
+        inp.close()
+    data = np.asarray(data, dtype=np.float32).reshape(spec.height, spec.width, spec.nchannels)
+    data = data[:, :, [names.index(c) for c in wanted]]
+
+    full_w, full_h = spec.full_width, spec.full_height
+    if (spec.x, spec.y, spec.width, spec.height) == (spec.full_x, spec.full_y, full_w, full_h):
+        return Frame(np.ascontiguousarray(data), wanted)
+    canvas = np.zeros((full_h, full_w, len(wanted)), np.float32)
+    # Data window origin relative to the display window origin.
+    ox, oy = spec.x - spec.full_x, spec.y - spec.full_y
+    x0, y0 = max(ox, 0), max(oy, 0)
+    x1, y1 = min(ox + spec.width, full_w), min(oy + spec.height, full_h)
+    if x1 > x0 and y1 > y0:
+        canvas[y0:y1, x0:x1] = data[y0 - oy:y1 - oy, x0 - ox:x1 - ox]
+    return Frame(canvas, wanted)

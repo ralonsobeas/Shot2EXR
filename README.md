@@ -4,8 +4,9 @@ Converts a MOV/MP4 video or an existing EXR sequence into a correctly named, OCI
 EXR sequence (`PROJECT_SHOT_TASK_vVVV.FRAME.exr`) plus a JSON conversion report.
 One engine, two front ends: a PySide6 GUI (`shot2exr-gui`) and a CLI (`shot2exr`).
 
-> **Status: Milestone 1.** Source inspection, colour space detection, naming and full dry runs
-> work in both GUI and CLI. Writing EXRs arrives in Milestone 2 (EXR input) and 3 (video input).
+> **Status: Milestone 2.** EXR sequence -> EXR conversion works end to end in GUI and CLI
+> (OCIO colour conversion, FIT/FILL/STRETCH resize, half-float ZIP EXRs, JSON report).
+> Video (MOV/MP4) input can be inspected and dry-run; converting it arrives in Milestone 3.
 
 ## Install (development)
 
@@ -110,7 +111,18 @@ An EXR directory containing several sequences is rejected; pass the path of one 
 
 Exit codes: 0 OK, 1 internal error, 2 invalid parameters, 3 source problem, 4 colour space
 (unknown / needs confirmation / bad OCIO config), 5 output problem (e.g. files exist),
-6 missing dependency, 7 not implemented yet, 8 settings problem (no projects root, unmapped project/task).
+6 missing dependency, 7 not implemented yet (video conversion), 8 settings problem (no projects root,
+unmapped project/task), 9 cancelled.
+
+## What a conversion does
+
+Per frame, one frame in memory at a time: read EXR (display window, RGB or RGBA) -> OCIO input -> scene-linear
+working space (only if the input is not already scene-linear and a resize is needed) -> Lanczos-3 resize
+(premultiplied, unclamped: negatives and highlights survive) -> OCIO -> output space (alpha is
+un-premultiplied around colour transforms) -> half-float ZIP EXR with `colorInteropID`/`chromaticities` of the
+*output* space. Frames are written to a hidden staging folder and moved into place only after all of them are
+written and validated, then `PROJECT_SHOT_TASK_vVVV.conversion_report.json` is written. A failed or cancelled run
+removes its partial frames and leaves `...conversion_report.FAILED.json` / `.CANCELLED.json` instead.
 
 ## Colour management
 

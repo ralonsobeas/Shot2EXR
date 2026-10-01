@@ -135,6 +135,27 @@ class ColorConfig:
         except Exception:  # noqa: BLE001 - malformed rules must not break inspection
             return None
 
+    def scene_linear(self) -> str | None:
+        """The config's ``scene_linear`` role (the working space for resizing), if defined."""
+        try:
+            cs = self._cfg.getColorSpace("scene_linear")
+        except Exception:  # noqa: BLE001
+            cs = None
+        return cs.getName() if cs is not None else None
+
+    def processor(self, src: str, dst: str) -> Any | None:
+        """Optimised CPU processor ``src -> dst``; ``None`` when the transform is a no-op."""
+        if src == dst:
+            return None
+        ocio = _ocio()
+        try:
+            proc = self._cfg.getProcessor(src, dst)
+        except Exception as exc:  # noqa: BLE001
+            raise ColorSpaceError(f"OCIO cannot build a transform '{src}' -> '{dst}': {exc}") from None
+        if proc.isNoOp():
+            return None
+        return proc.getOptimizedCPUProcessor(ocio.OPTIMIZATION_LOSSLESS)
+
     def describe(self) -> dict[str, Any]:
         return {
             "source": self.source,
@@ -170,3 +191,57 @@ def load_config(explicit: str | os.PathLike | None = None) -> ColorConfig:
     except Exception as exc:  # PyOpenColorIO raises its own Exception type
         raise ColorSpaceError(f"Invalid OCIO config ({origin}) {source}: {exc}") from None
     return ColorConfig(cfg, source, origin)
+
+
+@dataclass
+class ColorPipeline:
+    """Colour steps around the resize: ``input -> resize_space`` before, ``resize_space -> output`` after.
+
+    Resizing happens in scene-linear light: the input space itself when it is scene-linear
+    (or data), otherwise the config's ``scene_linear`` role. Identical spaces produce no transform.
+    """
+
+    input: str
+    output: str
+    resize_space: str
+    pre: Any | None
+    post: Any | None
+    steps: list[str]
+
+    @classmethod
+    def build(cls, cfg: ColorConfig, input_cs: str, output_cs: str, resizing: bool) -> "ColorPipeline":
+        entry = cfg.entry(input_cs)
+        linear_input = entry is not None and (entry.is_data or entry.encoding == "scene-linear")
+        working = cfg.scene_linear()
+        if not resizing or linear_input or working is None:
+            space = input_cs
+        else:
+            space = working
+        pre, post = cfg.processor(input_cs, space), cfg.processor(space, output_cs)
+        steps = []
+        if pre is not None:
+            steps.append(f"OCIO '{input_cs}' -> '{space}' (scene-linear working space for resizing)")
+        if post is not None:
+            steps.append(f"OCIO '{space}' -> '{output_cs}'")
+        if resizing and not linear_input and working is None:
+            steps.append(f"note: no scene_linear role in the config; resized in '{input_cs}'")
+        return cls(input_cs, output_cs, space, pre, post, steps)
+
+    @staticmethod
+    def apply(processor: Any | None, pixels: Any) -> Any:
+        """Apply to RGB in place. With alpha, RGB is un-premultiplied around the transform."""
+        if processor is None:
+            return pixels
+        import numpy as np
+
+        rgb = np.ascontiguousarray(pixels[..., :3])
+        if pixels.shape[2] == 4:
+            alpha = pixels[..., 3]
+            mask = alpha > 0
+            rgb[mask] /= alpha[mask][:, None]
+            processor.applyRGB(rgb)
+            rgb[mask] *= alpha[mask][:, None]
+        else:
+            processor.applyRGB(rgb)
+        pixels[..., :3] = rgb
+        return pixels

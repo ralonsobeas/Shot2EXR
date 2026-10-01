@@ -10,7 +10,7 @@ from typing import Any
 
 from shot2exr import TOOL_NAME, __version__, config
 from shot2exr.color_manager import load_config
-from shot2exr.converter import ConversionPlan, Inspection, environment_info, inspect_source, plan_conversion
+from shot2exr.converter import ConversionPlan, Inspection, environment_info, inspect_source, plan_conversion, run_conversion
 from shot2exr.errors import ExitCode, Shot2EXRError
 from shot2exr.models import ConversionRequest, ResizeMode
 from shot2exr.settings import load_settings
@@ -143,6 +143,18 @@ def format_plan(plan: ConversionPlan) -> str:
 
 # --------------------------------------------------------------------------- main
 
+def _progress_printer():
+    tty = sys.stderr.isatty()
+
+    def show(done: int, total: int, name: str) -> None:
+        if tty:
+            print(f"\r  [{done:>{len(str(total))}}/{total}] {name}", end="" if done < total else "\n", file=sys.stderr, flush=True)
+        elif done == total or done % max(1, total // 10) == 0:
+            print(f"  [{done}/{total}] {name}", file=sys.stderr, flush=True)
+
+    return show
+
+
 def _emit(args, payload: dict[str, Any], text: str) -> None:
     print(json.dumps(payload, indent=2, default=str) if args.json else text)
 
@@ -189,14 +201,22 @@ def main(argv: list[str] | None = None) -> int:
             ffmpeg_path=args.ffmpeg_path, ffprobe_path=args.ffprobe_path,
         )
         settings = None if args.output_dir else load_settings(args.settings)
-        plan = plan_conversion(request, settings=settings)
-        _emit(args, plan.to_dict(), format_plan(plan))
-        if not plan.ok:
+        cfg = load_config(args.ocio_config)
+        plan = plan_conversion(request, cfg, settings=settings)
+        if args.dry_run or not plan.ok:
+            _emit(args, plan.to_dict(), format_plan(plan))
             return plan.exit_code
-        if args.dry_run:
-            return ExitCode.OK
-        print("shot2exr: conversion is not implemented yet (Milestone 2). Use --dry-run.", file=sys.stderr)
-        return ExitCode.NOT_IMPLEMENTED
+        if not args.json:
+            print(format_plan(plan).replace("PLAN (dry run, nothing written)", "PLAN"))
+        result = run_conversion(plan, cfg, progress=None if args.json else _progress_printer())
+        if args.json:
+            print(json.dumps({"plan": plan.to_dict(), "result": result.to_dict()}, indent=2, default=str))
+        else:
+            print(f"\n{result.status.upper()}: {result.frames_written} frame(s) in {result.output_directory}")
+            for err in result.errors:
+                print(f"ERROR: {err}", file=sys.stderr)
+            print(f"Report: {result.report_path}")
+        return result.exit_code
     except Shot2EXRError as exc:
         if args.json:
             print(json.dumps({"ok": False, "error": {"code": exc.exit_code.name, "message": exc.message, "details": exc.problems}}, indent=2))

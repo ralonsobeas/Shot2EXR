@@ -16,16 +16,15 @@ from PySide6.QtWidgets import (
 from shot2exr import TOOL_NAME, __version__, config, naming
 from shot2exr.cli import format_inspection, format_plan
 from shot2exr.color_manager import ColorConfig, load_config
-from shot2exr.converter import ConversionPlan, Inspection, inspect_source, plan_conversion
+from shot2exr.converter import ConversionPlan, ConversionResult, Inspection, inspect_source, plan_conversion
 from shot2exr.errors import Shot2EXRError, ValidationError
 from shot2exr.gui.styles import ERROR, MUTED, OK, STATE_COLORS, WARN
-from shot2exr.gui.workers import EngineTask
+from shot2exr.gui.workers import ConversionTask, EngineTask
 from shot2exr.models import ConversionRequest, DetectionState, Resolution, ResizeMode
 from shot2exr.output_paths import OutputLocation, resolve_output_location
 from shot2exr.settings import Settings, current_platform, load_settings, save_settings
 
 AUTO = config.DEFAULT_INPUT_COLORSPACE
-NOT_YET = "Available in Milestone 2 (conversion engine)."
 
 
 def _value_label() -> QLabel:
@@ -50,6 +49,8 @@ class MainWindow(QMainWindow):
         self._settings = Settings()
         self._settings_error: str | None = None
         self._location: OutputLocation | None = None
+        self._conversion: ConversionTask | None = None
+        self._report_path: Path | None = None
 
         left = QWidget()
         left_layout = QVBoxLayout(left)
@@ -219,6 +220,9 @@ class MainWindow(QMainWindow):
         for mode in ResizeMode:
             self.resize_combo.addItem(mode.value.capitalize(), mode)
         form.addRow("Resize Mode", self.resize_combo)
+        self.overwrite_check = QCheckBox("Overwrite existing output files")
+        self.overwrite_check.setToolTip("Off by default. Existing frames of this version are only replaced when enabled.")
+        form.addRow("", self.overwrite_check)
         self.preview_label = QLabel("-")
         self.preview_label.setObjectName("preview")
         self.preview_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -235,11 +239,11 @@ class MainWindow(QMainWindow):
         self.dry_run_btn.clicked.connect(self.dry_run)
         self.start_btn = QPushButton("Start Conversion")
         self.start_btn.setObjectName("primary")
-        self.start_btn.setEnabled(False)
-        self.start_btn.setToolTip(NOT_YET)
+        self.start_btn.clicked.connect(self.start_conversion)
+        self.start_btn.setToolTip("EXR sequence input. Video input arrives in Milestone 3.")
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setEnabled(False)
-        self.cancel_btn.setToolTip(NOT_YET)
+        self.cancel_btn.clicked.connect(self.cancel_conversion)
         for w in (self.dry_run_btn, self.start_btn, self.cancel_btn):
             row.addWidget(w)
         lay.addLayout(row)
@@ -256,7 +260,7 @@ class MainWindow(QMainWindow):
         self.log.setFont(QFont("monospace", 9))
         self.log.setLineWrapMode(QPlainTextEdit.NoWrap)
         lay.addWidget(self.log, 1)
-        self.result_label = QLabel("Conversion engine: Milestone 2. Dry runs are fully functional.")
+        self.result_label = QLabel("Inspect the source, run a dry run, then start the conversion.")
         self.result_label.setObjectName("muted")
         self.result_label.setWordWrap(True)
         lay.addWidget(self.result_label)
@@ -265,7 +269,7 @@ class MainWindow(QMainWindow):
         self.open_folder_btn.clicked.connect(self._open_output_folder)
         self.open_report_btn = QPushButton("Open Conversion Report")
         self.open_report_btn.setEnabled(False)
-        self.open_report_btn.setToolTip(NOT_YET)
+        self.open_report_btn.clicked.connect(self._open_report)
         row2.addWidget(self.open_folder_btn)
         row2.addWidget(self.open_report_btn)
         lay.addLayout(row2)
@@ -289,7 +293,11 @@ class MainWindow(QMainWindow):
     def _set_busy(self, busy: bool) -> None:
         self.inspect_btn.setEnabled(not busy)
         self.dry_run_btn.setEnabled(not busy)
-        self.progress.setRange(0, 0 if busy else 100)
+        self.start_btn.setEnabled(not busy)
+        if busy:
+            self.progress.setRange(0, 0)  # indeterminate until the frame count is known
+        elif self.progress.maximum() == 0:
+            self.progress.setRange(0, 100)
 
     def _on_task_finished(self, task: EngineTask) -> None:
         self._tasks.discard(task)
@@ -501,6 +509,7 @@ class MainWindow(QMainWindow):
             ocio_config=self.ocio_edit.text().strip() or None,
             resize_mode=self.resize_combo.currentData(),
             accept_inferred_colorspace=self.accept_inferred.isChecked(),
+            overwrite=self.overwrite_check.isChecked(),
             dry_run=True,
         )
 
@@ -525,10 +534,86 @@ class MainWindow(QMainWindow):
         self.frame_label.setText(f"0 / {n}")
         if plan.ok:
             self._set_result(f"Dry run OK: {n} frames would be written to {plan.location.directory}. "
-                             "(Conversion arrives in Milestone 2.)", OK)
+                             "Ready to convert.", OK)
         else:
             self._set_result(f"Dry run found {len(plan.errors)} problem(s): {plan.errors[0].message}", ERROR)
         self.statusBar().showMessage("Dry run finished.")
+
+    # ------------------------------------------------------------------ conversion
+
+    def start_conversion(self) -> None:
+        if self._cfg is None:
+            self._set_result("Fix the OCIO configuration first.", ERROR)
+            return
+        request = self.build_request()
+        request.dry_run = False
+        reuse = self._inspection if self._inspected_path == self.input_edit.text().strip() else None
+        if self.element_edit.text().strip():
+            self._qsettings.setValue("element", self.element_edit.text().strip())
+        task = ConversionTask(request, self._cfg, reuse, self._settings)
+        task.signals.planned.connect(self._on_conversion_planned)
+        task.signals.progress.connect(self._on_progress)
+        task.signals.succeeded.connect(self._on_conversion_done)
+        task.signals.failed.connect(self._on_task_failed)
+        task.signals.finished.connect(lambda t=task: self._on_conversion_finished(t))
+        self._conversion = task
+        self._tasks.add(task)
+        self._set_busy(True)
+        self.cancel_btn.setEnabled(True)
+        self.open_report_btn.setEnabled(False)
+        self._report_path = None
+        self.progress.setRange(0, 0)
+        self._log("Starting conversion ...")
+        self.statusBar().showMessage("Converting...")
+        self._pool.start(task)
+
+    def cancel_conversion(self) -> None:
+        if getattr(self, "_conversion", None) is not None:
+            self._conversion.cancel()
+            self.cancel_btn.setEnabled(False)
+            self._log("Cancelling after the current frame ...")
+
+    def _on_conversion_planned(self, plan: ConversionPlan) -> None:
+        if not plan.ok:
+            self._on_plan(plan)
+            return
+        self._log(format_plan(plan).replace("PLAN (dry run, nothing written)", "PLAN") + "\n")
+        self.progress.setRange(0, plan.frame_count or 0)
+        self.progress.setValue(0)
+        self.frame_label.setText(f"0 / {plan.frame_count}")
+
+    def _on_progress(self, done: int, total: int, name: str) -> None:
+        self.progress.setValue(done)
+        self.frame_label.setText(f"{done} / {total}")
+        self.statusBar().showMessage(f"Wrote {name}")
+
+    def _on_conversion_done(self, result: ConversionResult) -> None:
+        self._report_path = result.report_path
+        self.open_report_btn.setEnabled(bool(result.report_path and Path(result.report_path).is_file()))
+        if result.ok:
+            self._set_result(f"Conversion complete: {result.frames_written} frames in {result.output_directory}", OK)
+            self._log(f"SUCCESS: {result.frames_written} frames written to {result.output_directory}")
+        else:
+            self._set_result(f"Conversion {result.status}: {'; '.join(result.errors)}. No partial frames were kept.",
+                             WARN if result.status == "cancelled" else ERROR)
+            self._log(f"{result.status.upper()}: {'; '.join(result.errors)}")
+        self._log(f"Report: {result.report_path}\n")
+        self._update_open_buttons()
+
+    def _on_conversion_finished(self, task: ConversionTask) -> None:
+        self._conversion = None
+        self.cancel_btn.setEnabled(False)
+        self._on_task_finished(task)
+
+    def _open_report(self) -> None:
+        if getattr(self, "_report_path", None):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._report_path)))
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if getattr(self, "_conversion", None) is not None:
+            self._conversion.cancel()  # partial output is cleaned up by the engine
+            self._pool.waitForDone(60000)
+        super().closeEvent(event)
 
     # ------------------------------------------------------------------ browse / open
 
