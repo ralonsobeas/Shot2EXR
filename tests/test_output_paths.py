@@ -151,7 +151,7 @@ def test_explicit_output_dir_override(ocio_cfg, exr_src, tmp_path):
     assert not (tmp_path / "manual").exists()
 
 
-def test_cli_auto_directory(exr_src, tmp_path, capsys):
+def test_cli_auto_directory(exr_src, tmp_path, capsys, isolated_settings):
     import json
 
     from shot2exr.cli import main
@@ -164,6 +164,8 @@ def test_cli_auto_directory(exr_src, tmp_path, capsys):
     assert main(args + ["--projects-root", str(root)]) == ExitCode.OK
     out = json.loads(capsys.readouterr().out)["output"]
     assert out["directory"].endswith("ComfyUI/water/GOD_0046_005_ml_v001".replace("/", __import__("os").sep))
-    assert main(args) == ExitCode.CONFIG  # Linux root empty by default
+    # No root configured for this OS (the shipped Linux default; set explicitly so Windows behaves the same).
+    isolated_settings.write_text('[paths.linux]\nprojects_root = ""\n[paths.windows]\nprojects_root = ""\n')
+    assert main(args) == ExitCode.CONFIG
     assert main(args[:8] + args[10:]) == ExitCode.USAGE  # --element missing
     assert list(root.iterdir()) == []
