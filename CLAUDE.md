@@ -31,7 +31,12 @@ Primary platform Rocky Linux 9, also Windows 10/11. Same codebase.
 - Video colour: BT.709-tagged video -> INFERRED `Gamma 2.4 Encoded Rec.709` (BT.1886 decode), with
   `Camera Rec.709` named as the alternative. sRGB/linear/gamma2.2 tags -> DETECTED. PQ/HLG -> INFERRED display
   spaces. Untagged/SD -> UNKNOWN. Missing range/matrix tags downgrade DETECTED to INFERRED.
-  Decode info (YUV matrix, range) is recorded separately (`ColorDetection.decode`) for the M3 decoder.
+  Decode info (YUV matrix, range) is recorded separately (`ColorDetection.decode`) and drives the decoder.
+- Video decode (`video_reader.py`): FFmpeg pipe -> rawvideo `rgb48le`/`rgba64le` -> float32. swscale gets
+  explicit `in_color_matrix`, `in_range`, `out_range=pc` (flags spline+accurate_rnd+full_chroma_int);
+  no transfer/primaries change in FFmpeg. `-fps_mode passthrough -noautorotate`, first video stream only.
+  Straight alpha premultiplied after decode. Decoded count must equal probed count (both directions).
+  `media_probe.frame_timing` records packet pts timing; VFR is warned, never resampled.
 - EXR colour: `colorInteropID` -> DETECTED; `acesImageContainerFlag` -> DETECTED ACES2065-1;
   chromaticities only -> INFERRED linear of those primaries; OCIO file rules (non-default) -> INFERRED;
   differing metadata across frames -> UNKNOWN. `oiio:ColorSpace` is ignored (OIIO derives it).
@@ -66,19 +71,21 @@ QT_QPA_PLATFORM=offscreen python -m pytest
 ```
 
 ## Status
+- Milestone 3 (video engine): done 2026-10-01 on branch `milestone-3` (PR to main). 159 tests pass in both
+  Linux envs (conda FFmpeg 9.0.2, pip/system FFmpeg 6.1); GUI also under Xvfb/xcb.
 - Milestone 2 (EXR conversion engine): done 2026-10-01 on branch `milestone-2` (PR to main). 151 tests pass
   (same two Linux envs; GUI also under Xvfb/xcb).
 - Milestone 1 (foundation + GUI): done 2026-10-01; Amendment 1 (auto output dirs) done same day. 136 tests passed on Linux (Ubuntu 24.04 container) with
   the conda-forge env (py3.12, OIIO 3.1.17, OCIO 2.5.2, PySide6 6.11.2, FFmpeg 9.0.2) and with pip wheels
   (py3.11, OCIO 2.6, FFmpeg 6.1). GUI tests pass on offscreen and xcb (Xvfb). NOT yet run on Rocky Linux 9
   or Windows; `.github/workflows/tests.yml` is prepared but has never run.
-- Next: Milestone 3 (video decode via FFmpeg using `ColorDetection.decode`, video -> EXR, frame-count validation).
+- Next: Milestone 4 (hardening, packaging) only when the owner asks.
 
 ## Known limitations / notes
-- Video conversion raises NOT_IMPLEMENTED (exit 7) until Milestone 3.
 - Multi-part EXRs: only part 0; extra channels (AOVs, depth) are dropped. Luminance-only EXRs are rejected.
 - Cancellation is checked between frames (a single huge frame finishes first).
 - FFmpeg >= 9 ignores `-color_primaries/-color_trc` output options for tagging unless frames are tagged
-  (`-vf setparams=...`); test fixtures do both. Keep in mind for M3.
+  (`-vf setparams=...`); test fixtures do both.
 - Video frame count: `nb_frames`, else exact packet count (`-count_packets`), else duration estimate (warned).
-- Rotation metadata, non-square pixels and interlacing are reported, not corrected.
+- Rotation metadata, non-square pixels and interlacing are reported, not corrected (decode ignores rotation).
+- Video cancel is checked between frames; FFmpeg is killed on cancel/failure.

@@ -4,9 +4,8 @@ Converts a MOV/MP4 video or an existing EXR sequence into a correctly named, OCI
 EXR sequence (`PROJECT_SHOT_TASK_vVVV.FRAME.exr`) plus a JSON conversion report.
 One engine, two front ends: a PySide6 GUI (`shot2exr-gui`) and a CLI (`shot2exr`).
 
-> **Status: Milestone 2.** EXR sequence -> EXR conversion works end to end in GUI and CLI
-> (OCIO colour conversion, FIT/FILL/STRETCH resize, half-float ZIP EXRs, JSON report).
-> Video (MOV/MP4) input can be inspected and dry-run; converting it arrives in Milestone 3.
+> **Status: Milestone 3.** EXR sequence -> EXR and MOV/MP4 -> EXR conversion work end to end in GUI
+> and CLI (FFmpeg decode, OCIO colour conversion, FIT/FILL/STRETCH resize, half-float ZIP EXRs, JSON report).
 
 ## Install (development)
 
@@ -111,7 +110,7 @@ An EXR directory containing several sequences is rejected; pass the path of one 
 
 Exit codes: 0 OK, 1 internal error, 2 invalid parameters, 3 source problem, 4 colour space
 (unknown / needs confirmation / bad OCIO config), 5 output problem (e.g. files exist),
-6 missing dependency, 7 not implemented yet (video conversion), 8 settings problem (no projects root,
+6 missing dependency, 7 not implemented, 8 settings problem (no projects root,
 unmapped project/task), 9 cancelled.
 
 ## What a conversion does
@@ -129,7 +128,12 @@ removes its partial frames and leaves `...conversion_report.FAILED.json` / `.CAN
 * OCIO config: `--ocio-config` > `$OCIO` > OCIO's built-in ACES studio config (`ocio://studio-config-latest`).
 * Input colour space `auto` reports **DETECTED**, **INFERRED** (requires `--accept-inferred-colorspace`
   or the GUI checkbox) or **UNKNOWN** (requires a manual choice). Manual choices always win and are recorded.
-* Video: YUV->RGB decoding (matrix, range) is kept separate from the OCIO transform so nothing is applied twice.
+* Video: FFmpeg only undoes the YUV encoding (explicit matrix and range, to full-range R'G'B', 16-bit);
+  transfer and primaries are left to OCIO so nothing is applied twice. Every decoded frame is kept in
+  order (`-fps_mode passthrough`, no frame dropping or duplication, also for VFR), and the decoded count
+  must match the probed count or the conversion fails without leaving frames behind. Straight alpha
+  (e.g. ProRes 4444) is premultiplied for EXR. The report records packet timing, the decode settings
+  and the exact FFmpeg command.
 
 ## Tests
 

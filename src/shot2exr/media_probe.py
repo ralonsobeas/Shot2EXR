@@ -202,6 +202,14 @@ def probe_video(path: Path, ffprobe_path: str | None = None, count_frames: bool 
         counted = count_video_packets(path, ffprobe)
         if counted:
             info.frame_count, info.frame_count_method = counted, "count_packets"
+    timing = frame_timing(path, ffprobe)
+    info.extra["timing"] = timing
+    if timing and timing.get("constant") is False and not info.variable_frame_rate:
+        info.variable_frame_rate = True
+        info.warnings.append(
+            "Frame durations vary (variable frame rate). Every decoded frame is kept once; "
+            "source timing is recorded in the report."
+        )
     if info.frame_count is None:
         info.errors.append("Could not determine the number of video frames.")
     elif info.frame_count_method == "estimated":
@@ -216,3 +224,31 @@ def tool_version(executable: Path) -> str | None:
         return None
     first = (proc.stdout or "").splitlines()[:1]
     return first[0] if first else None
+
+
+def frame_timing(path: Path, ffprobe: Path) -> dict[str, Any] | None:
+    """Presentation timing of the first video stream from packet timestamps (no decoding).
+
+    Used for the report, mainly to document variable-frame-rate sources.
+    """
+    cmd = [str(ffprobe), "-v", "error", "-select_streams", "v:0", "-show_entries", "packet=pts_time",
+           "-of", "csv=p=0", str(path)]
+    try:
+        proc = _run(cmd)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    pts = sorted(float(v) for v in (proc.stdout or "").split() if v.strip() not in ("", "N/A"))
+    if len(pts) < 2:
+        return {"packets": len(pts), "first_pts_s": pts[0] if pts else None}
+    deltas = [b - a for a, b in zip(pts, pts[1:])]
+    return {
+        "packets": len(pts),
+        "first_pts_s": round(pts[0], 6),
+        "last_pts_s": round(pts[-1], 6),
+        "min_frame_duration_s": round(min(deltas), 6),
+        "max_frame_duration_s": round(max(deltas), 6),
+        "mean_frame_duration_s": round(sum(deltas) / len(deltas), 6),
+        "constant": max(deltas) - min(deltas) < 1e-4,
+    }

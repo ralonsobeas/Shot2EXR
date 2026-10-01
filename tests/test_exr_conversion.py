@@ -211,13 +211,3 @@ def test_auto_directory_created_only_on_success(ocio_cfg, source, tmp_path):
     assert res.ok and res.output_directory == vdir
     assert sorted(p.name for p in vdir.iterdir())[-1] == "GOD_0046_005_ml_v003.conversion_report.json"
     assert json.loads(res.report_path.read_text())["output"]["projects_root"] == str(root)
-
-
-def test_video_input_not_implemented(ocio_cfg, make_video, tmp_path):
-    req = ConversionRequest(input_path=make_video("a.mov", frames=2), project="GOD", shot="0046_005", task="ml",
-                            version="001", start_frame=1, output_resolution=Resolution(16, 16), element="water",
-                            output_directory=tmp_path / "o", accept_inferred_colorspace=True)
-    plan = plan_conversion(req, ocio_cfg)
-    with pytest.raises(Shot2EXRError) as exc:
-        run_conversion(plan, ocio_cfg)
-    assert exc.value.exit_code is ExitCode.NOT_IMPLEMENTED and not (tmp_path / "o").exists()

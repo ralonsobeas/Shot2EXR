@@ -240,7 +240,6 @@ class MainWindow(QMainWindow):
         self.start_btn = QPushButton("Start Conversion")
         self.start_btn.setObjectName("primary")
         self.start_btn.clicked.connect(self.start_conversion)
-        self.start_btn.setToolTip("EXR sequence input. Video input arrives in Milestone 3.")
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.clicked.connect(self.cancel_conversion)

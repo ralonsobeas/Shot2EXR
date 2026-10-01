@@ -95,7 +95,7 @@ def test_video_plan(ocio_cfg, make_video, tmp_path):
     plan = plan_conversion(_req(src, tmp_path, accept_inferred_colorspace=True), ocio_cfg)
     assert plan.ok, plan.errors
     assert plan.frame_count == 10 and plan.frame_range == (1009, 1018)
-    assert plan.color_transforms[0].startswith("decode: YUV->RGB matrix bt709, tv range")
+    assert plan.color_transforms[0].startswith("decode (FFmpeg, no transfer/primaries change): YUV->RGB matrix bt709, tv range")
 
 
 def test_bad_inputs(ocio_cfg, tmp_path):
