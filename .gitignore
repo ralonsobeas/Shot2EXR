@@ -1,0 +1,76 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+.installed.cfg
+
+# ---- Environments (conda / venv) ----
+.venv/
+venv/
+env/
+.conda/
+envs/
+.python-version
+.env
+.env.*
+
+# ---- Build and packaging (PyInstaller etc.) ----
+build/
+dist/
+*.spec
+*.manifest
+*.exe
+*.msi
+*.AppImage
+
+# ---- Test / tool caches ----
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+
+# ---- Qt / PySide6 generated files ----
+*.qmlc
+*.jsc
+.qmake.stash
+*.pro.user*
+
+# ---- Media and conversion output (never commit footage or renders) ----
+*.exr
+*.EXR
+*.mov
+*.MOV
+*.mp4
+*.MP4
+*.conversion_report.json
+output/
+renders/
+
+# ---- Local / machine-specific configuration ----
+# Per-user Shot2EXR settings (projects roots, studio mappings). The shipped defaults live in
+# src/shot2exr/default_settings.toml and ARE committed.
+settings.toml
+!src/shot2exr/default_settings.toml
+*.local.toml
+*.ocio.local
+
+# ---- Temporary, OS and editor files ----
+*.tmp
+*.bak
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.code-workspace

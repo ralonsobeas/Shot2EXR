@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shot2exr"
+dynamic = ["version"]
+description = "Convert MOV/MP4 or EXR sequences into pipeline-named, OCIO-converted EXR sequences."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+# Native dependencies (PySide6, OpenImageIO, OpenColorIO, FFmpeg) come from conda-forge via
+# environment.yml, so they are deliberately not listed here: pip would otherwise try to
+# replace the conda builds with PyPI wheels. Use the "pip" extra for a pip-only setup.
+dependencies = []
+
+[project.optional-dependencies]
+pip = ["numpy>=1.26", "PySide6>=6.7,<6.12", "OpenImageIO>=3.0,<3.2", "opencolorio>=2.4,<2.7"]
+test = ["pytest>=8"]
+
+[project.scripts]
+shot2exr = "shot2exr.cli:main"
+
+[project.gui-scripts]
+shot2exr-gui = "shot2exr.gui.main:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "shot2exr.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+shot2exr = ["default_settings.toml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

@@ -1,0 +1,45 @@
+# Planned CI (not yet executed: no GitHub repository is attached yet).
+# Linux runs inside a Rocky Linux 9 container; ubuntu-latest alone is not proof of Rocky 9 compatibility.
+name: tests
+
+on: [push, pull_request]
+
+jobs:
+  rocky9:
+    runs-on: ubuntu-latest
+    container: rockylinux:9
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - name: System libraries for headless Qt (offscreen/xcb)
+        run: dnf install -y git mesa-libEGL mesa-libGL libxkbcommon libxkbcommon-x11 fontconfig xcb-util-cursor xorg-x11-server-Xvfb
+      - uses: actions/checkout@v4
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: environment.yml
+          cache-environment: true
+      - run: python -m pip install -e . --no-deps
+      - run: python -m pytest -v
+        env:
+          QT_QPA_PLATFORM: offscreen
+      - name: GUI smoke test on the X11 (xcb) platform plugin
+        run: xvfb-run -a python -m pytest -v tests/test_gui.py
+        env:
+          QT_QPA_PLATFORM: xcb
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: environment.yml
+          cache-environment: true
+      - run: python -m pip install -e . --no-deps
+      - run: python -m pytest -v
+        env:
+          QT_QPA_PLATFORM: offscreen
