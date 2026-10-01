@@ -19,7 +19,7 @@ _FOLDER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _-]*(?<! )$")
 
 
 def sequence_from_shot(shot: str) -> str:
-    """``0046_005`` -> ``0046`` (first ``_`` component, kept as text so leading zeros survive)."""
+    """``0010_020`` -> ``0010`` (first ``_`` component, kept as text so leading zeros survive)."""
     return naming.validate_token(shot, "Shot").split("_", 1)[0]
 
 

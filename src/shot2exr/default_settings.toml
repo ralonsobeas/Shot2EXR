@@ -1,19 +1,19 @@
 # Shot2EXR default settings (shipped with the application).
 # Override any value in your user settings file (shown by `shot2exr --env-info`), or point
 # the SHOT2EXR_SETTINGS environment variable at another file. Tables are merged key by key.
+# Studio-specific values (projects root, project and task codes) belong in that user or studio file.
 
 [paths.windows]
-projects_root = "T:/Volumes/Projects"
-
-[paths.linux]
-# Set this to the production storage mount point on Rocky Linux 9. Left empty on purpose:
-# Shot2EXR refuses to build output paths until it is configured.
+# Production storage root on Windows, e.g. "P:/Projects". Empty: Shot2EXR refuses to build
+# output paths until it is configured (GUI: Settings..., or the settings file).
 projects_root = ""
 
-# Project code -> project folder name under projects_root.
-[projects]
-GOD = "GodOfTides"
+[paths.linux]
+# Production storage mount point on Rocky Linux 9, e.g. "/mnt/projects". Empty until configured.
+projects_root = ""
 
-# Task code -> task folder name under .../Tasks/.
+# Project code -> project folder name under projects_root, e.g. PROJ = "MyProject".
+[projects]
+
+# Task code -> task folder name under .../Tasks/, e.g. comp = "Compositing".
 [tasks]
-ml = "MachineLearning"

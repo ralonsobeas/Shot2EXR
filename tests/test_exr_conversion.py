@@ -14,7 +14,7 @@ from shot2exr.models import ConversionRequest, Resolution, ResizeMode
 
 oiio = pytest.importorskip("OpenImageIO")
 np = pytest.importorskip("numpy")
-BASE = "GOD_0046_005_ml_v001"
+BASE = "PROJ_0010_020_comp_v001"
 
 
 def write_exr(path, pixels, attrs=None, data_window=None):
@@ -55,7 +55,7 @@ def source(tmp_path):
 
 
 def convert(cfg, src, out, **kw):
-    params = dict(input_path=Path(src), project="GOD", shot="0046_005", task="ml", version="001", start_frame=1009,
+    params = dict(input_path=Path(src), project="PROJ", shot="0010_020", task="comp", version="001", start_frame=1009,
                   output_resolution=Resolution(48, 27), element="water", output_directory=Path(out))
     params.update(kw)
     plan = plan_conversion(ConversionRequest(**params), cfg)
@@ -142,7 +142,7 @@ def test_overwrite_protection_and_overwrite(ocio_cfg, source, tmp_path):
     out = tmp_path / "out"
     src = source(2)
     convert(ocio_cfg, src, out)
-    req = dict(input_path=src, project="GOD", shot="0046_005", task="ml", version="001", start_frame=1009,
+    req = dict(input_path=src, project="PROJ", shot="0010_020", task="comp", version="001", start_frame=1009,
                output_resolution=Resolution(48, 27), element="water", output_directory=out)
     plan = plan_conversion(ConversionRequest(**req), ocio_cfg)
     assert plan.exit_code is ExitCode.OUTPUT and len(plan.collisions) == 3
@@ -156,7 +156,7 @@ def test_cancel_leaves_no_partial_sequence(ocio_cfg, source, tmp_path):
     out = tmp_path / "out"
     src = source(4)
     cancel = threading.Event()
-    req = ConversionRequest(input_path=src, project="GOD", shot="0046_005", task="ml", version="001", start_frame=1009,
+    req = ConversionRequest(input_path=src, project="PROJ", shot="0010_020", task="comp", version="001", start_frame=1009,
                             output_resolution=Resolution(48, 27), element="water", output_directory=out)
     plan = plan_conversion(req, ocio_cfg)
     res = run_conversion(plan, ocio_cfg, cancel=cancel, progress=lambda done, total, name: cancel.set())
@@ -185,7 +185,7 @@ def test_failure_mid_sequence_writes_failed_report(ocio_cfg, source, tmp_path, m
     monkeypatch.setattr(converter, "write_frame", flaky)
     from shot2exr.settings import load_settings
 
-    req = ConversionRequest(input_path=source(3), project="GOD", shot="0046_005", task="ml", version="001",
+    req = ConversionRequest(input_path=source(3), project="PROJ", shot="0010_020", task="comp", version="001",
                             start_frame=1009, output_resolution=Resolution(48, 27), element="water",
                             projects_root=str(root))
     plan = plan_conversion(req, ocio_cfg, settings=load_settings())
@@ -201,13 +201,13 @@ def test_auto_directory_created_only_on_success(ocio_cfg, source, tmp_path):
 
     root = tmp_path / "Projects"
     root.mkdir()
-    req = ConversionRequest(input_path=source(2), project="GOD", shot="0046_005", task="ml", version="003",
+    req = ConversionRequest(input_path=source(2), project="PROJ", shot="0010_020", task="comp", version="003",
                             start_frame=1009, output_resolution=Resolution(48, 27), element="smoke",
                             projects_root=str(root))
     plan = plan_conversion(req, ocio_cfg, settings=load_settings())
-    vdir = root / "GodOfTides/VFX/GOD_0046/GOD_0046_005/Tasks/MachineLearning/ComfyUI/smoke/GOD_0046_005_ml_v003"
+    vdir = root / "MyProject/VFX/PROJ_0010/PROJ_0010_020/Tasks/Compositing/ComfyUI/smoke/PROJ_0010_020_comp_v003"
     assert not vdir.exists()
     res = run_conversion(plan, ocio_cfg)
     assert res.ok and res.output_directory == vdir
-    assert sorted(p.name for p in vdir.iterdir())[-1] == "GOD_0046_005_ml_v003.conversion_report.json"
+    assert sorted(p.name for p in vdir.iterdir())[-1] == "PROJ_0010_020_comp_v003.conversion_report.json"
     assert json.loads(res.report_path.read_text())["output"]["projects_root"] == str(root)
