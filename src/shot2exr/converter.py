@@ -6,6 +6,7 @@ validation, colour resolution, naming, collision checks). Pixel conversion is Mi
 
 from __future__ import annotations
 
+import contextlib
 import os
 import platform
 import shutil
@@ -23,7 +24,7 @@ from shot2exr.colorspace_detector import PRIMARIES, detect_exr, gamut_of_interop
 from shot2exr.errors import ExitCode, InputError, OutputError, Shot2EXRError
 from shot2exr.exr_reader import ExrHeader, oiio_version, read_frame, read_header
 from shot2exr.exr_writer import write_frame
-from shot2exr.media_probe import probe_video, resolve_executable
+from shot2exr.media_probe import frame_timing, probe_video, resolve_executable
 from shot2exr.models import (
     ColorDetection, ConversionRequest, DetectionState, Resolution, SourceInfo, SourceType,
 )
@@ -33,6 +34,7 @@ from shot2exr.resize import ResizeGeometry, apply_geometry, compute_geometry
 from shot2exr.sequence_detector import find_sequence
 from shot2exr.settings import Settings, load_settings, user_settings_path
 from shot2exr.validation import validate_request
+from shot2exr.video_reader import VideoDecoder
 
 
 @dataclass
@@ -345,10 +347,6 @@ def plan_conversion(request: ConversionRequest, cfg: ColorConfig | None = None,
             plan.color_transforms = processing_steps(cfg, plan)[1]
         except Shot2EXRError as exc:
             plan.error(exc.exit_code, exc.message)
-        if src.source_type is SourceType.VIDEO and inspection.detection.decode:
-            d = inspection.detection.decode
-            if d.get("yuv_to_rgb"):
-                plan.color_transforms.insert(0, f"decode: YUV->RGB matrix {d['matrix']}, {d['range']} range")
 
     if src.source_type is SourceType.VIDEO:
         try:
@@ -395,6 +393,16 @@ class ConversionResult:
 ProgressCallback = Callable[[int, int, str], None]
 
 
+def _source_frames(src: SourceInfo, decoder: VideoDecoder | None):
+    """Yield ``(Frame, header attributes)`` one at a time, in source order."""
+    if decoder is not None:
+        for i, frame in enumerate(decoder):
+            yield frame, {"shot2exr:sourceFile": Path(src.path).name, "shot2exr:sourceFrame": i}
+        return
+    for number, file in zip(src.sequence.frames, src.sequence.files):
+        yield read_frame(file), {"shot2exr:sourceFile": file.name, "shot2exr:sourceFrame": number}
+
+
 def processing_steps(cfg: ColorConfig, plan: ConversionPlan) -> tuple[ColorPipeline, list[str]]:
     """The exact per-frame steps, shared by the dry run and the real conversion."""
     resizing = plan.geometry is not None and not plan.geometry.is_identity
@@ -405,6 +413,13 @@ def processing_steps(cfg: ColorConfig, plan: ConversionPlan) -> tuple[ColorPipel
                      f"resize (lanczos3, in '{pipeline.resize_space}'): {plan.geometry.describe()}")
     if not steps:
         steps = [f"none (input and output are both '{plan.output_colorspace}', no resize)"]
+    decode = plan.inspection.detection.decode if plan.inspection else None
+    if plan.inspection and plan.inspection.source.source_type is SourceType.VIDEO and decode:
+        if decode.get("yuv_to_rgb"):
+            what = f"YUV->RGB matrix {decode.get('matrix')}, {decode.get('range')} range -> full-range R'G'B'"
+        else:
+            what = f"RGB samples, {decode.get('range')} range -> full-range R'G'B'"
+        steps.insert(0, f"decode (FFmpeg, no transfer/primaries change): {what}")
     return pipeline, steps
 
 
@@ -437,10 +452,11 @@ def run_conversion(plan: ConversionPlan, cfg: ColorConfig, *, progress: Progress
         raise Shot2EXRError("The conversion plan has unresolved problems; run a dry run to see them.",
                             [e.message for e in plan.errors])
     src = plan.inspection.source
-    if src.source_type is not SourceType.EXR_SEQUENCE:
-        err = Shot2EXRError("Video conversion arrives in Milestone 3; only EXR sequences can be converted now.")
-        err.exit_code = ExitCode.NOT_IMPLEMENTED
-        raise err
+    decoder: VideoDecoder | None = None
+    if src.source_type is SourceType.VIDEO:
+        decode = plan.inspection.detection.decode or {"yuv_to_rgb": True, "matrix": "bt709", "range": "tv"}
+        decoder = VideoDecoder(resolve_executable("ffmpeg", plan.request.ffmpeg_path), Path(src.path),
+                               src.resolution, decode, bool(src.has_alpha))
 
     started = datetime.now(timezone.utc).astimezone()
     out_dir = Path(plan.location.directory)
@@ -462,19 +478,27 @@ def run_conversion(plan: ConversionPlan, cfg: ColorConfig, *, progress: Progress
     try:
         staging.mkdir(parents=False, exist_ok=False)
         total = len(names)
-        for i, (src_file, name) in enumerate(zip(src.sequence.files, names)):
-            if cancel is not None and cancel.is_set():
-                raise ConversionCancelled("Conversion cancelled by the user.")
-            frame = read_frame(src_file)
-            px = ColorPipeline.apply(pipeline.pre, frame.pixels)
-            if plan.geometry and not plan.geometry.is_identity:
-                px = apply_geometry(px, plan.geometry)
-            px = ColorPipeline.apply(pipeline.post, px)
-            write_frame(staging / name, px, frame.channels,
-                        {**attrs, "shot2exr:sourceFile": src_file.name, "shot2exr:sourceFrame": src.sequence.frames[i]})
-            written.append(name)
-            if progress:
-                progress(i + 1, total, name)
+        with contextlib.ExitStack() as stack:
+            if decoder is not None:
+                stack.enter_context(decoder)
+            for i, (frame, source_attrs) in enumerate(_source_frames(src, decoder)):
+                if cancel is not None and cancel.is_set():
+                    raise ConversionCancelled("Conversion cancelled by the user.")
+                if i >= total:
+                    raise InputError(f"The source has more frames than the {total} expected; "
+                                     "frame count changed or was mis-reported. Nothing was written.")
+                name = names[i]
+                px = ColorPipeline.apply(pipeline.pre, frame.pixels)
+                if plan.geometry and not plan.geometry.is_identity:
+                    px = apply_geometry(px, plan.geometry)
+                px = ColorPipeline.apply(pipeline.post, px)
+                write_frame(staging / name, px, frame.channels, {**attrs, **source_attrs})
+                written.append(name)
+                if progress:
+                    progress(i + 1, total, name)
+        if len(written) != total:
+            raise InputError(f"The source produced {len(written)} frames but {total} were expected "
+                             f"(frame count from {src.frame_count_method}). Nothing was written.")
 
         # Validate before anything becomes visible under the final names.
         present = sorted(p.name for p in staging.iterdir() if p.suffix.lower() == ".exr")
@@ -499,6 +523,11 @@ def run_conversion(plan: ConversionPlan, cfg: ColorConfig, *, progress: Progress
                           frames_written=len(written) if status == STATUS_SUCCESS else 0,
                           files=names if status == STATUS_SUCCESS else [], errors=errors, warnings=warnings,
                           validation_passed=status == STATUS_SUCCESS)
+    if decoder is not None:
+        report["input"]["timing"] = src.extra.get("timing")
+        report["input"]["frames_decoded"] = decoder.frames_decoded
+        report["color_management"]["decode"] = plan.inspection.detection.decode
+        report["color_management"]["decoder_command"] = decoder.command
     if status == STATUS_SUCCESS:
         rpath = report_path(out_dir, plan.basename, STATUS_SUCCESS)
         write_report(staging / rpath.name, report)
