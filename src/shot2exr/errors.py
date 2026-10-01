@@ -15,6 +15,7 @@ class ExitCode(IntEnum):
     DEPENDENCY = 6  # FFmpeg/FFprobe/OIIO/OCIO missing
     NOT_IMPLEMENTED = 7  # feature arrives in a later milestone
     CONFIG = 8  # settings: projects root / folder mappings missing or invalid
+    CANCELLED = 9  # conversion cancelled by the user
 
 
 class Shot2EXRError(Exception):

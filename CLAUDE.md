@@ -12,13 +12,16 @@ Primary platform Rocky Linux 9, also Windows 10/11. Same codebase.
 - `config.py` constants/defaults; `errors.py` exception hierarchy + `ExitCode`; `models.py` dataclasses.
 - `naming.py` pure naming/frame rules; `validation.py` parameter parsing/validation (all problems at once).
 - `media_probe.py` FFprobe (argument lists, never `shell=True`; `parse_ffprobe` is pure).
-- `sequence_detector.py` filesystem-only EXR sequence discovery; `exr_reader.py` OIIO header reads.
+- `sequence_detector.py` filesystem-only EXR sequence discovery; `exr_reader.py` OIIO header + pixel reads
+  (`read_frame` resolves data window -> display window); `exr_writer.py` half/ZIP writer (fresh header).
 - `color_manager.py` OCIO config loading (explicit > `$OCIO` > `ocio://studio-config-latest`) and lookups.
 - `colorspace_detector.py` DETECTED / INFERRED / UNKNOWN from metadata, keyed by Color Interop IDs.
 - `settings.py` TOML settings (bundled `default_settings.toml` < user file / `$SHOT2EXR_SETTINGS`): per-OS
   `projects_root`, `[projects]` and `[tasks]` code -> folder maps. `output_paths.py` is the ONLY output-path
   builder (`resolve_output_location`), used by converter, CLI and GUI preview.
-- `resize.py` FIT/FILL/STRETCH geometry. `converter.py` = the engine: `inspect_source`, `plan_conversion`.
+- `resize.py` FIT/FILL/STRETCH geometry. `converter.py` = the engine: `inspect_source`,
+  `plan_conversion`, `processing_steps` (shared by dry run and conversion), `run_conversion`.
+- `color_manager.ColorPipeline`: input -> resize space -> output processors. `report.py`: JSON report.
 - `cli.py` (argparse) and `gui/` (PySide6) are thin layers over `converter`. GUI runs engine calls in
   `QThreadPool` (`gui/workers.py`) and only touches widgets from signal handlers on the GUI thread.
 
@@ -40,8 +43,15 @@ Primary platform Rocky Linux 9, also Windows 10/11. Same codebase.
   missing dirs are a warning ("created when conversion starts"). Auto mode: non-empty existing version dir
   is an error unless overwrite. Manual `--output-dir` override keeps the old per-file collision rules.
   Dry run never creates anything. GUI remembers the last element via QSettings.
-- M2 must: create the version dir only at conversion start, write into a temp dir/names and rename on
-  success (no complete-looking partial output), and put `element` + resolved directory in the report.
+- Conversion safety: frames go to a hidden staging dir (`.<version>.inprogress-<id>` beside a new version dir,
+  or `.shot2exr-inprogress-<id>` inside an existing one), are validated (count + dimensions), then renamed /
+  `os.replace`d into place; the report is written last. Failure/cancel/Ctrl+C: staging removed and
+  `*.conversion_report.FAILED.json` / `.CANCELLED.json` written in the version dir; dry runs ignore those (and
+  dot-files) when checking for a non-empty version dir, and a later success deletes them.
+- Colour order: unpremult around every OCIO transform; resize premultiplied; resize space = input if it is
+  scene-linear/data, else config role `scene_linear`; identical spaces -> no processor. Output header gets the
+  output space's `colorInteropID` (+ chromaticities when the gamut is known), never copied input metadata.
+- Resize filter: OIIO `lanczos3` (unclamped). FIT pads transparent black, FILL crops centred.
 - CLI `--version` alone prints the tool version; `--version 001` is the output version (`--version-number` alias).
 
 ## Conventions
@@ -56,14 +66,18 @@ QT_QPA_PLATFORM=offscreen python -m pytest
 ```
 
 ## Status
-- Milestone 1 (foundation + GUI): done 2026-10-01; Amendment 1 (auto output dirs) done same day. 136 tests pass on Linux (Ubuntu 24.04 container) with
+- Milestone 2 (EXR conversion engine): done 2026-10-01 on branch `milestone-2` (PR to main). 151 tests pass
+  (same two Linux envs; GUI also under Xvfb/xcb).
+- Milestone 1 (foundation + GUI): done 2026-10-01; Amendment 1 (auto output dirs) done same day. 136 tests passed on Linux (Ubuntu 24.04 container) with
   the conda-forge env (py3.12, OIIO 3.1.17, OCIO 2.5.2, PySide6 6.11.2, FFmpeg 9.0.2) and with pip wheels
   (py3.11, OCIO 2.6, FFmpeg 6.1). GUI tests pass on offscreen and xcb (Xvfb). NOT yet run on Rocky Linux 9
   or Windows; `.github/workflows/tests.yml` is prepared but has never run.
-- Next: Milestone 2 (EXR read, OCIO processor, resize, EXR write, report.py, GUI progress/cancel).
+- Next: Milestone 3 (video decode via FFmpeg using `ColorDetection.decode`, video -> EXR, frame-count validation).
 
 ## Known limitations / notes
-- No pixel conversion yet; Start Conversion / Cancel / Open Report are disabled in the GUI.
+- Video conversion raises NOT_IMPLEMENTED (exit 7) until Milestone 3.
+- Multi-part EXRs: only part 0; extra channels (AOVs, depth) are dropped. Luminance-only EXRs are rejected.
+- Cancellation is checked between frames (a single huge frame finishes first).
 - FFmpeg >= 9 ignores `-color_primaries/-color_trc` output options for tagging unless frames are tagged
   (`-vf setparams=...`); test fixtures do both. Keep in mind for M3.
 - Video frame count: `nb_frames`, else exact packet count (`-count_packets`), else duration estimate (warned).

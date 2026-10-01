@@ -59,7 +59,7 @@ def match_primaries(chroma: Sequence[float] | None) -> str | None:
     return None
 
 
-def _gamut_of_interop(interop_id: str) -> str | None:
+def gamut_of_interop(interop_id: str) -> str | None:
     parts = interop_id.split(":")[-1].split("_")
     return next((p for p in parts if p in PRIMARIES), None)
 
@@ -189,7 +189,7 @@ def detect_exr(frame_attributes: Sequence[dict[str, Any]], cfg: ColorConfig | No
     evidence["ocio_file_rule"] = file_rule
 
     if interop:
-        expected = _gamut_of_interop(str(interop))
+        expected = gamut_of_interop(str(interop))
         if gamut and expected and gamut != expected:
             return _finish(INFERRED, str(interop),
                            f"colorInteropID is '{interop}' but the chromaticities match {gamut}; confirm which is correct.",

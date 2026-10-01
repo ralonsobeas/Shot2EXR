@@ -8,21 +8,28 @@ from __future__ import annotations
 
 import os
 import platform
+import shutil
+import threading
+import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from shot2exr import TOOL_NAME, __version__, config, naming
-from shot2exr.color_manager import ColorConfig, load_config, ocio_version
-from shot2exr.colorspace_detector import detect_exr, detect_video
-from shot2exr.errors import ExitCode, InputError, Shot2EXRError
-from shot2exr.exr_reader import ExrHeader, oiio_version, read_header
+from shot2exr.color_manager import ColorConfig, ColorPipeline, load_config, ocio_version
+from shot2exr.colorspace_detector import PRIMARIES, detect_exr, gamut_of_interop, detect_video
+from shot2exr.errors import ExitCode, InputError, OutputError, Shot2EXRError
+from shot2exr.exr_reader import ExrHeader, oiio_version, read_frame, read_header
+from shot2exr.exr_writer import write_frame
 from shot2exr.media_probe import probe_video, resolve_executable
 from shot2exr.models import (
     ColorDetection, ConversionRequest, DetectionState, Resolution, SourceInfo, SourceType,
 )
 from shot2exr.output_paths import OutputLocation, resolve_output_location
-from shot2exr.resize import ResizeGeometry, compute_geometry
+from shot2exr.report import STATUS_CANCELLED, STATUS_FAILED, STATUS_SUCCESS, build_report, report_path, write_report
+from shot2exr.resize import ResizeGeometry, apply_geometry, compute_geometry
 from shot2exr.sequence_detector import find_sequence
 from shot2exr.settings import Settings, load_settings, user_settings_path
 from shot2exr.validation import validate_request
@@ -278,6 +285,11 @@ def _check_output(plan: ConversionPlan) -> None:
         plan.error(ExitCode.OUTPUT, f"{len(plan.collisions)} output file(s) already exist (e.g. {plan.collisions[0]}); enable overwrite to replace them.")
     elif plan.collisions:
         plan.warnings.append(f"{len(plan.collisions)} existing output file(s) will be overwritten.")
+    stale = {report_path(out, plan.basename, st).name for st in (STATUS_FAILED, STATUS_CANCELLED)}
+    leftovers = {n for n in existing if n.startswith(".") or n in stale}
+    for name in sorted(stale & existing):
+        plan.warnings.append(f"A previous attempt did not complete ({name}); it is ignored and removed on success.")
+    existing -= leftovers
     if plan.location.origin == "auto" and existing and not req.overwrite and not plan.collisions:
         plan.error(ExitCode.OUTPUT, f"Version directory {out} already exists and is not empty ({len(existing)} item(s)); "
                    "use a new version or enable overwrite.")
@@ -329,10 +341,10 @@ def plan_conversion(request: ConversionRequest, cfg: ColorConfig | None = None,
         if entry and entry.is_data:
             plan.warnings.append(f"Output colour space '{out_name}' is a data space: no colour conversion will be applied.")
     if plan.input_colorspace and plan.output_colorspace:
-        if plan.input_colorspace == plan.output_colorspace:
-            plan.color_transforms = [f"none (input and output are both '{plan.output_colorspace}')"]
-        else:
-            plan.color_transforms = [f"OCIO: '{plan.input_colorspace}' -> '{plan.output_colorspace}'"]
+        try:
+            plan.color_transforms = processing_steps(cfg, plan)[1]
+        except Shot2EXRError as exc:
+            plan.error(exc.exit_code, exc.message)
         if src.source_type is SourceType.VIDEO and inspection.detection.decode:
             d = inspection.detection.decode
             if d.get("yuv_to_rgb"):
@@ -346,6 +358,174 @@ def plan_conversion(request: ConversionRequest, cfg: ColorConfig | None = None,
     if plan.frame_count and plan.location:
         _check_output(plan)
     return plan
+
+
+# --------------------------------------------------------------------------- conversion
+
+class ConversionCancelled(Shot2EXRError):
+    exit_code = ExitCode.CANCELLED
+
+
+@dataclass
+class ConversionResult:
+    status: str  # success | failed | cancelled
+    output_directory: Path
+    report_path: Path | None
+    frames_written: int
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    duration_s: float = 0.0
+
+    @property
+    def ok(self) -> bool:
+        return self.status == STATUS_SUCCESS
+
+    @property
+    def exit_code(self) -> ExitCode:
+        if self.ok:
+            return ExitCode.OK
+        return ExitCode.CANCELLED if self.status == STATUS_CANCELLED else ExitCode.ERROR
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"status": self.status, "output_directory": str(self.output_directory),
+                "report": str(self.report_path) if self.report_path else None, "frames_written": self.frames_written,
+                "errors": self.errors, "warnings": self.warnings, "duration_s": self.duration_s}
+
+
+ProgressCallback = Callable[[int, int, str], None]
+
+
+def processing_steps(cfg: ColorConfig, plan: ConversionPlan) -> tuple[ColorPipeline, list[str]]:
+    """The exact per-frame steps, shared by the dry run and the real conversion."""
+    resizing = plan.geometry is not None and not plan.geometry.is_identity
+    pipeline = ColorPipeline.build(cfg, plan.input_colorspace, plan.output_colorspace, resizing)
+    steps = list(pipeline.steps)
+    if resizing:
+        steps.insert(1 if pipeline.pre is not None else 0,
+                     f"resize (lanczos3, in '{pipeline.resize_space}'): {plan.geometry.describe()}")
+    if not steps:
+        steps = [f"none (input and output are both '{plan.output_colorspace}', no resize)"]
+    return pipeline, steps
+
+
+def _output_attributes(cfg: ColorConfig, plan: ConversionPlan) -> dict[str, Any]:
+    """Colour metadata describing the *output* encoding (input metadata is never copied)."""
+    entry = cfg.entry(plan.output_colorspace)
+    attrs: dict[str, Any] = {
+        "shot2exr:inputColorspace": plan.input_colorspace,
+        "shot2exr:outputColorspace": plan.output_colorspace,
+        "shot2exr:ocioConfig": cfg.name or cfg.source,
+    }
+    if entry and not entry.is_data and entry.interop_id:
+        attrs["colorInteropID"] = entry.interop_id
+        gamut = gamut_of_interop(entry.interop_id)
+        if gamut:
+            attrs["chromaticities"] = PRIMARIES[gamut]
+    return attrs
+
+
+def run_conversion(plan: ConversionPlan, cfg: ColorConfig, *, progress: ProgressCallback | None = None,
+                   cancel: threading.Event | None = None) -> ConversionResult:
+    """Convert every source frame, one at a time, into ``plan.location.directory``.
+
+    Frames are written to a hidden staging directory and only moved into place after all frames
+    are written and validated, so an interrupted run never leaves a complete-looking sequence.
+    A failed or cancelled run removes its partial frames and writes ``*.conversion_report.FAILED.json``
+    (or ``.CANCELLED.json``) instead of the normal report.
+    """
+    if not plan.ok:
+        raise Shot2EXRError("The conversion plan has unresolved problems; run a dry run to see them.",
+                            [e.message for e in plan.errors])
+    src = plan.inspection.source
+    if src.source_type is not SourceType.EXR_SEQUENCE:
+        err = Shot2EXRError("Video conversion arrives in Milestone 3; only EXR sequences can be converted now.")
+        err.exit_code = ExitCode.NOT_IMPLEMENTED
+        raise err
+
+    started = datetime.now(timezone.utc).astimezone()
+    out_dir = Path(plan.location.directory)
+    existed = out_dir.is_dir()
+    token = uuid.uuid4().hex[:8]
+    if existed:
+        staging = out_dir / f".shot2exr-inprogress-{token}"
+    else:
+        out_dir.parent.mkdir(parents=True, exist_ok=True)
+        staging = out_dir.parent / f".{out_dir.name}.inprogress-{token}"
+    target = plan.request.output_resolution
+    names = plan.output_filenames()
+    pipeline, transforms = processing_steps(cfg, plan)
+    attrs = _output_attributes(cfg, plan)
+    warnings = [w for w in plan.warnings if "will be created" not in w]
+    written: list[str] = []
+    status, errors = STATUS_FAILED, []
+    interrupt: BaseException | None = None
+    try:
+        staging.mkdir(parents=False, exist_ok=False)
+        total = len(names)
+        for i, (src_file, name) in enumerate(zip(src.sequence.files, names)):
+            if cancel is not None and cancel.is_set():
+                raise ConversionCancelled("Conversion cancelled by the user.")
+            frame = read_frame(src_file)
+            px = ColorPipeline.apply(pipeline.pre, frame.pixels)
+            if plan.geometry and not plan.geometry.is_identity:
+                px = apply_geometry(px, plan.geometry)
+            px = ColorPipeline.apply(pipeline.post, px)
+            write_frame(staging / name, px, frame.channels,
+                        {**attrs, "shot2exr:sourceFile": src_file.name, "shot2exr:sourceFrame": src.sequence.frames[i]})
+            written.append(name)
+            if progress:
+                progress(i + 1, total, name)
+
+        # Validate before anything becomes visible under the final names.
+        present = sorted(p.name for p in staging.iterdir() if p.suffix.lower() == ".exr")
+        if present != sorted(names):
+            raise OutputError(f"Expected {len(names)} frames in staging, found {len(present)}.")
+        for name in names:
+            hdr = read_header(staging / name)
+            if (hdr.width, hdr.height) != (target.width, target.height):
+                raise OutputError(f"{name} is {hdr.width}x{hdr.height}, expected {target}.")
+        status = STATUS_SUCCESS
+    except ConversionCancelled as exc:
+        status, errors = STATUS_CANCELLED, [exc.message]
+    except Shot2EXRError as exc:
+        errors = [str(exc)]
+    except KeyboardInterrupt as exc:
+        status, errors, interrupt = STATUS_CANCELLED, ["Interrupted (Ctrl+C)."], exc
+    except Exception as exc:  # noqa: BLE001 - report every failure, never leave half a sequence
+        errors = [f"{type(exc).__name__}: {exc}"]
+
+    finished = datetime.now(timezone.utc).astimezone()
+    report = build_report(plan, status=status, started=started, finished=finished, transforms=transforms,
+                          frames_written=len(written) if status == STATUS_SUCCESS else 0,
+                          files=names if status == STATUS_SUCCESS else [], errors=errors, warnings=warnings,
+                          validation_passed=status == STATUS_SUCCESS)
+    if status == STATUS_SUCCESS:
+        rpath = report_path(out_dir, plan.basename, STATUS_SUCCESS)
+        write_report(staging / rpath.name, report)
+        try:
+            if existed:
+                for item in staging.iterdir():
+                    os.replace(item, out_dir / item.name)
+                staging.rmdir()
+            else:
+                os.rename(staging, out_dir)
+        except OSError as exc:
+            status, errors = STATUS_FAILED, [f"Could not move the finished frames into {out_dir}: {exc}"]
+            report["general"]["status"] = status
+            report["validation"].update(result="failed", errors=errors)
+    if status != STATUS_SUCCESS:
+        shutil.rmtree(staging, ignore_errors=True)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        report["output"]["partial_frames_removed"] = len(written)
+        rpath = write_report(report_path(out_dir, plan.basename, status), report)
+    else:
+        for stale in (STATUS_FAILED, STATUS_CANCELLED):
+            report_path(out_dir, plan.basename, stale).unlink(missing_ok=True)
+    result = ConversionResult(status, out_dir, rpath, len(written) if status == STATUS_SUCCESS else 0, errors,
+                              warnings, report["general"]["processing_duration_s"])
+    if interrupt is not None:
+        raise interrupt
+    return result
 
 
 def environment_info() -> dict[str, Any]:
