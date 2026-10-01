@@ -68,6 +68,8 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(1, 2)
         self.setCentralWidget(splitter)
         self.statusBar().showMessage("Drop a MOV/MP4 file or an EXR folder to begin.")
+        help_menu = self.menuBar().addMenu("&Help")
+        help_menu.addAction("Check environment", self._check_environment)
 
         self._load_studio_settings()
         self._load_ocio_config()
@@ -276,6 +278,18 @@ class MainWindow(QMainWindow):
         return box
 
     # ------------------------------------------------------------------ helpers
+
+    def _check_environment(self) -> None:
+        from shot2exr import diagnostics
+
+        self._log("Checking dependencies (OpenImageIO, OpenColorIO, FFmpeg, Qt, settings)...")
+        self._run(diagnostics.run_checks, self._on_environment_checked,
+                  ocio_config=self.ocio_edit.text().strip() or None, include_gui=False)
+
+    def _on_environment_checked(self, checks) -> None:
+        from shot2exr import diagnostics
+
+        self._log(diagnostics.format_checks(checks))
 
     def _log(self, text: str) -> None:
         self.log.appendPlainText(text)

@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import traceback
 from pathlib import Path
 from typing import Any
 
 from shot2exr import TOOL_NAME, __version__, config
 from shot2exr.color_manager import load_config
 from shot2exr.converter import ConversionPlan, Inspection, environment_info, inspect_source, plan_conversion, run_conversion
-from shot2exr.errors import ExitCode, Shot2EXRError
+from shot2exr.errors import ExitCode, Shot2EXRError, describe_os_error
 from shot2exr.models import ConversionRequest, ResizeMode
 from shot2exr.settings import load_settings
 from shot2exr.validation import parse_resolution
@@ -50,6 +52,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--inspect", action="store_true", help="Only inspect --input (metadata and colour detection).")
     p.add_argument("--list-colorspaces", action="store_true", help="List colour spaces of the active OCIO config.")
     p.add_argument("--env-info", action="store_true", help="Print dependency versions.")
+    p.add_argument("--check-environment", action="store_true",
+                   help="Test every native dependency (OIIO, OCIO, FFmpeg, Qt, settings); exit 6 if one is broken.")
     p.add_argument("--json", action="store_true", help="Machine-readable JSON output.")
     return p
 
@@ -168,6 +172,13 @@ def main(argv: list[str] | None = None) -> int:
             info = environment_info()
             _emit(args, info, "\n".join(f"{k}: {v}" for k, v in info.items()))
             return ExitCode.OK
+        if args.check_environment:
+            from shot2exr import diagnostics
+
+            checks = diagnostics.run_checks(ocio_config=args.ocio_config, ffmpeg_path=args.ffmpeg_path,
+                                            ffprobe_path=args.ffprobe_path, settings_path=args.settings)
+            _emit(args, diagnostics.summary(checks), diagnostics.format_checks(checks))
+            return ExitCode.OK if diagnostics.summary(checks)["ok"] else ExitCode.DEPENDENCY
         if args.list_colorspaces:
             cfg = load_config(args.ocio_config)
             entries = cfg.colorspaces()
@@ -215,7 +226,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"\n{result.status.upper()}: {result.frames_written} frame(s) in {result.output_directory}")
             for err in result.errors:
                 print(f"ERROR: {err}", file=sys.stderr)
-            print(f"Report: {result.report_path}")
+            if result.report_path:
+                print(f"Report: {result.report_path}")
         return result.exit_code
     except Shot2EXRError as exc:
         if args.json:
@@ -226,6 +238,17 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("shot2exr: interrupted", file=sys.stderr)
         return 130
+    except Exception as exc:  # noqa: BLE001 - never end on a bare traceback
+        message = describe_os_error(exc, "The operation") if isinstance(exc, OSError) else f"{type(exc).__name__}: {exc}"
+        if args.json:
+            print(json.dumps({"ok": False, "error": {"code": ExitCode.ERROR.name, "message": message, "details": []}}, indent=2))
+        else:
+            print(f"shot2exr: internal error: {message}", file=sys.stderr)
+            if os.environ.get("SHOT2EXR_DEBUG"):
+                traceback.print_exc()
+            else:
+                print("Set SHOT2EXR_DEBUG=1 to see the full traceback.", file=sys.stderr)
+        return ExitCode.ERROR
 
 
 if __name__ == "__main__":

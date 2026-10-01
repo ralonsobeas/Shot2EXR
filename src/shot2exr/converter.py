@@ -1,7 +1,8 @@
 """The shared engine used by both the CLI and the GUI.
 
-Milestone 1: ``inspect_source`` (metadata only) and ``plan_conversion`` (the full dry run:
-validation, colour resolution, naming, collision checks). Pixel conversion is Milestone 2+.
+``inspect_source`` (metadata only), ``plan_conversion`` (the full dry run: validation, colour
+resolution, naming, collision and disk-space checks) and ``run_conversion`` (frame-by-frame
+conversion through a hidden staging directory).
 """
 
 from __future__ import annotations
@@ -9,10 +10,12 @@ from __future__ import annotations
 import contextlib
 import os
 import platform
+import queue
 import shutil
 import threading
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,7 +24,7 @@ from typing import Any
 from shot2exr import TOOL_NAME, __version__, config, naming
 from shot2exr.color_manager import ColorConfig, ColorPipeline, load_config, ocio_version
 from shot2exr.colorspace_detector import PRIMARIES, detect_exr, gamut_of_interop, detect_video
-from shot2exr.errors import ExitCode, InputError, OutputError, Shot2EXRError
+from shot2exr.errors import ExitCode, InputError, OutputError, Shot2EXRError, describe_os_error
 from shot2exr.exr_reader import ExrHeader, oiio_version, read_frame, read_header
 from shot2exr.exr_writer import write_frame
 from shot2exr.media_probe import frame_timing, probe_video, resolve_executable
@@ -256,9 +259,31 @@ def _resolve_input_colorspace(plan: ConversionPlan, cfg: ColorConfig) -> None:
         plan.error(ExitCode.COLORSPACE, "Input colour space is UNKNOWN: set --input-colorspace to a colour space of the active OCIO config.")
 
 
+def _estimated_output_bytes(plan: ConversionPlan) -> int:
+    """Upper-bound size of the sequence: uncompressed half floats (ZIP usually saves 30-70%)."""
+    res, src = plan.request.output_resolution, plan.inspection.source
+    channels = 4 if src.has_alpha else 3
+    return res.width * res.height * channels * 2 * (plan.frame_count or 0)
+
+
+def _check_free_space(plan: ConversionPlan, out: Path) -> None:
+    existing = next((p for p in (out, *out.parents) if p.exists()), None)
+    if existing is None or not plan.frame_count:
+        return
+    try:
+        free = shutil.disk_usage(existing).free
+    except OSError:
+        return
+    need = _estimated_output_bytes(plan)
+    if free < need:
+        plan.warnings.append(f"Only {free / 1e9:.1f} GB free on the output storage; the sequence may need up to "
+                             f"{need / 1e9:.1f} GB (uncompressed estimate).")
+
+
 def _check_output(plan: ConversionPlan) -> None:
     req = plan.request
     out = Path(plan.location.directory)
+    _check_free_space(plan, out)
     if out.exists() and not out.is_dir():
         plan.error(ExitCode.OUTPUT, f"Output path exists and is not a directory: {out}")
         return
@@ -373,6 +398,7 @@ class ConversionResult:
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     duration_s: float = 0.0
+    failure_code: ExitCode = ExitCode.ERROR  # exit code of the error that stopped a failed run
 
     @property
     def ok(self) -> bool:
@@ -382,7 +408,7 @@ class ConversionResult:
     def exit_code(self) -> ExitCode:
         if self.ok:
             return ExitCode.OK
-        return ExitCode.CANCELLED if self.status == STATUS_CANCELLED else ExitCode.ERROR
+        return ExitCode.CANCELLED if self.status == STATUS_CANCELLED else self.failure_code
 
     def to_dict(self) -> dict[str, Any]:
         return {"status": self.status, "output_directory": str(self.output_directory),
@@ -391,6 +417,59 @@ class ConversionResult:
 
 
 ProgressCallback = Callable[[int, int, str], None]
+
+
+class _Prefetch:
+    """Run a frame iterator one item ahead in a background thread (bounded: one queued frame).
+
+    Errors from the source are re-raised in the consumer. Leaving the context stops the producer;
+    callers close the video decoder afterwards (ExitStack order), which unblocks a pending read.
+    """
+
+    _DONE = object()
+
+    def __init__(self, source: Iterator):
+        self._source = source
+        self._queue: queue.Queue = queue.Queue(maxsize=1)
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="shot2exr-read", daemon=True)
+
+    def _put(self, item) -> bool:
+        while not self._stop.is_set():
+            try:
+                self._queue.put(item, timeout=0.1)
+                return True
+            except queue.Full:
+                continue
+        return False
+
+    def _run(self) -> None:
+        try:
+            for item in self._source:
+                if not self._put(item):
+                    return
+            self._put(self._DONE)
+        except BaseException as exc:  # noqa: BLE001 - handed to the consumer thread
+            self._put(exc)
+
+    def __enter__(self) -> "_Prefetch":
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._stop.set()
+        with contextlib.suppress(queue.Empty):
+            while True:
+                self._queue.get_nowait()
+
+    def __iter__(self):
+        while True:
+            item = self._queue.get()
+            if item is self._DONE:
+                return
+            if isinstance(item, BaseException):
+                raise item
+            yield item
 
 
 def _source_frames(src: SourceInfo, decoder: VideoDecoder | None):
@@ -465,7 +544,6 @@ def run_conversion(plan: ConversionPlan, cfg: ColorConfig, *, progress: Progress
     if existed:
         staging = out_dir / f".shot2exr-inprogress-{token}"
     else:
-        out_dir.parent.mkdir(parents=True, exist_ok=True)
         staging = out_dir.parent / f".{out_dir.name}.inprogress-{token}"
     target = plan.request.output_resolution
     names = plan.output_filenames()
@@ -474,28 +552,43 @@ def run_conversion(plan: ConversionPlan, cfg: ColorConfig, *, progress: Progress
     warnings = [w for w in plan.warnings if "will be created" not in w]
     written: list[str] = []
     status, errors = STATUS_FAILED, []
+    failure_code = ExitCode.ERROR
     interrupt: BaseException | None = None
     try:
+        staging.parent.mkdir(parents=True, exist_ok=True)
         staging.mkdir(parents=False, exist_ok=False)
         total = len(names)
         with contextlib.ExitStack() as stack:
             if decoder is not None:
                 stack.enter_context(decoder)
-            for i, (frame, source_attrs) in enumerate(_source_frames(src, decoder)):
+            # Overlap I/O with processing: the next frame is read and the previous one written in
+            # background threads while this one is colour converted and resized. At most one frame
+            # waits on each side, so memory stays at a few frames whatever the sequence length.
+            frames = stack.enter_context(_Prefetch(_source_frames(src, decoder)))
+            writer = stack.enter_context(ThreadPoolExecutor(max_workers=1, thread_name_prefix="shot2exr-write"))
+            pending: Future | None = None
+
+            def finish_pending() -> None:
+                if pending is not None:
+                    pending.result()  # re-raises a write error here
+                    written.append(names[len(written)])
+                    if progress:
+                        progress(len(written), total, written[-1])
+
+            for i, (frame, source_attrs) in enumerate(frames):
                 if cancel is not None and cancel.is_set():
                     raise ConversionCancelled("Conversion cancelled by the user.")
                 if i >= total:
                     raise InputError(f"The source has more frames than the {total} expected; "
                                      "frame count changed or was mis-reported. Nothing was written.")
-                name = names[i]
                 px = ColorPipeline.apply(pipeline.pre, frame.pixels)
                 if plan.geometry and not plan.geometry.is_identity:
                     px = apply_geometry(px, plan.geometry)
                 px = ColorPipeline.apply(pipeline.post, px)
-                write_frame(staging / name, px, frame.channels, {**attrs, **source_attrs})
-                written.append(name)
-                if progress:
-                    progress(i + 1, total, name)
+                finish_pending()
+                pending = writer.submit(write_frame, staging / names[i], px, frame.channels, {**attrs, **source_attrs})
+            finish_pending()
+            pending = None
         if len(written) != total:
             raise InputError(f"The source produced {len(written)} frames but {total} were expected "
                              f"(frame count from {src.frame_count_method}). Nothing was written.")
@@ -512,7 +605,11 @@ def run_conversion(plan: ConversionPlan, cfg: ColorConfig, *, progress: Progress
     except ConversionCancelled as exc:
         status, errors = STATUS_CANCELLED, [exc.message]
     except Shot2EXRError as exc:
-        errors = [str(exc)]
+        errors, failure_code = [str(exc)], exc.exit_code
+    except OSError as exc:  # permissions, disk full, read-only or vanished storage
+        errors, failure_code = [describe_os_error(exc, "Writing the output")], ExitCode.OUTPUT
+    except MemoryError:
+        errors = ["Out of memory while processing a frame; close other applications or use a smaller resolution."]
     except KeyboardInterrupt as exc:
         status, errors, interrupt = STATUS_CANCELLED, ["Interrupted (Ctrl+C)."], exc
     except Exception as exc:  # noqa: BLE001 - report every failure, never leave half a sequence
@@ -539,19 +636,24 @@ def run_conversion(plan: ConversionPlan, cfg: ColorConfig, *, progress: Progress
             else:
                 os.rename(staging, out_dir)
         except OSError as exc:
-            status, errors = STATUS_FAILED, [f"Could not move the finished frames into {out_dir}: {exc}"]
+            status, failure_code = STATUS_FAILED, ExitCode.OUTPUT
+            errors = [describe_os_error(exc, f"Moving the finished frames into {out_dir}")]
             report["general"]["status"] = status
             report["validation"].update(result="failed", errors=errors)
     if status != STATUS_SUCCESS:
         shutil.rmtree(staging, ignore_errors=True)
-        out_dir.mkdir(parents=True, exist_ok=True)
         report["output"]["partial_frames_removed"] = len(written)
-        rpath = write_report(report_path(out_dir, plan.basename, status), report)
+        try:  # the failure report is best effort: the storage itself may be what failed
+            out_dir.mkdir(parents=True, exist_ok=True)
+            rpath = write_report(report_path(out_dir, plan.basename, status), report)
+        except OSError as exc:
+            rpath = None
+            errors.append(describe_os_error(exc, "Writing the failure report"))
     else:
         for stale in (STATUS_FAILED, STATUS_CANCELLED):
             report_path(out_dir, plan.basename, stale).unlink(missing_ok=True)
     result = ConversionResult(status, out_dir, rpath, len(written) if status == STATUS_SUCCESS else 0, errors,
-                              warnings, report["general"]["processing_duration_s"])
+                              warnings, report["general"]["processing_duration_s"], failure_code)
     if interrupt is not None:
         raise interrupt
     return result

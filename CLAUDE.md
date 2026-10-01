@@ -24,6 +24,12 @@ Primary platform Rocky Linux 9, also Windows 10/11. Same codebase.
 - `color_manager.ColorPipeline`: input -> resize space -> output processors. `report.py`: JSON report.
 - `cli.py` (argparse) and `gui/` (PySide6) are thin layers over `converter`. GUI runs engine calls in
   `QThreadPool` (`gui/workers.py`) and only touches widgets from signal handlers on the GUI thread.
+- `diagnostics.py` native dependency checks (`shot2exr --check-environment`, GUI Help menu): each check
+  exercises the dependency as the engine does (EXR round trip, OCIO processor, real FFmpeg rgb48 decode,
+  loading QtWidgets and the Qt platform plugin library). `gui/main.py --self-test` opens/closes the window.
+- `packaging/`: `shot2exr.spec` (one folder: windowed `Shot2EXR` + console `shot2exr-cli`, FFmpeg/FFprobe
+  from the build env copied into `_internal/`), `build.py` (build + BUILD_INFO.txt + archive), and
+  `smoke_test.py` (stdlib-only distribution test for clean machines). `tools/benchmark.py` measures s/frame.
 
 ## Decisions
 - Deps from conda-forge only (`environment.yml`, python 3.12); `pyproject` lists no runtime deps so
@@ -57,6 +63,16 @@ Primary platform Rocky Linux 9, also Windows 10/11. Same codebase.
   scene-linear/data, else config role `scene_linear`; identical spaces -> no processor. Output header gets the
   output space's `colorInteropID` (+ chromaticities when the gamut is known), never copied input metadata.
 - Resize filter: OIIO `lanczos3` (unclamped). FIT pads transparent black, FILL crops centred.
+- Pipelining: `run_conversion` reads the next frame (`_Prefetch`, queue of 1) and writes the previous one
+  (1-worker executor) while the current frame is processed: ~10-15% faster, memory bounded to a few frames
+  (test_hardening checks peak memory does not grow with sequence length).
+- Failures: OSError -> readable `describe_os_error` text and exit 5 (OUTPUT); `ConversionResult.exit_code`
+  carries the failing error's code. Failure report writing is best effort (report_path may be None).
+  CLI never ends on a raw traceback (internal error -> exit 1; `SHOT2EXR_DEBUG=1` prints it).
+  Plan warns (does not fail) when free space < uncompressed half-float estimate.
+- Frozen bundle: `media_probe.bundled_executable` prefers the bundled FFmpeg over PATH. Qt's OpenGL/EGL/
+  xcb-util system libs are NOT bundled on Linux (must match the system driver); INSTALL.md and the CI
+  `ROCKY9_GUI_PACKAGES` list them (keep in sync with `diagnostics.LINUX_GUI_PACKAGES`).
 - CLI `--version` alone prints the tool version; `--version 001` is the output version (`--version-number` alias).
 
 ## Conventions
@@ -71,6 +87,10 @@ QT_QPA_PLATFORM=offscreen python -m pytest
 ```
 
 ## Status
+- Milestone 4 (hardening + distribution): branch `milestone-4` (PR to main) 2026-10-01. 181 tests pass in both
+  Linux envs. A PyInstaller bundle built on Ubuntu passed packaging/smoke_test.py locally (offscreen + xcb);
+  real Rocky 9 / Windows bundle builds and clean-machine tests run only in CI (package-*/dist-* jobs).
+  Not done: code signing, an installer (.msi), AppImage/RPM, a real Rocky 9 desktop session (CI uses Xvfb).
 - Milestone 3 (video engine): done 2026-10-01 on branch `milestone-3` (PR to main). 159 tests pass in both
   Linux envs (conda FFmpeg 9.0.2, pip/system FFmpeg 6.1); GUI also under Xvfb/xcb.
 - Milestone 2 (EXR conversion engine): done 2026-10-01 on branch `milestone-2` (PR to main). 151 tests pass
@@ -79,7 +99,7 @@ QT_QPA_PLATFORM=offscreen python -m pytest
   the conda-forge env (py3.12, OIIO 3.1.17, OCIO 2.5.2, PySide6 6.11.2, FFmpeg 9.0.2) and with pip wheels
   (py3.11, OCIO 2.6, FFmpeg 6.1). GUI tests pass on offscreen and xcb (Xvfb). NOT yet run on Rocky Linux 9
   or Windows; `.github/workflows/tests.yml` is prepared but has never run.
-- Next: Milestone 4 (hardening, packaging) only when the owner asks.
+- Next: nothing scheduled; wait for the owner.
 
 ## Known limitations / notes
 - Multi-part EXRs: only part 0; extra channels (AOVs, depth) are dropped. Luminance-only EXRs are rejected.
@@ -89,3 +109,4 @@ QT_QPA_PLATFORM=offscreen python -m pytest
 - Video frame count: `nb_frames`, else exact packet count (`-count_packets`), else duration estimate (warned).
 - Rotation metadata, non-square pixels and interlacing are reported, not corrected (decode ignores rotation).
 - Video cancel is checked between frames; FFmpeg is killed on cancel/failure.
+- Linux bundle is ~480 MB unpacked (~175 MB tar.gz); conda-forge FFmpeg pulls in x265, OpenVINO, etc.

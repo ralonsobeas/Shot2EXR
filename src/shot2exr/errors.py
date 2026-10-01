@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 from enum import IntEnum
 
 
@@ -56,3 +57,22 @@ class DependencyError(Shot2EXRError):
 
 class ConfigError(Shot2EXRError):
     exit_code = ExitCode.CONFIG
+
+
+_OS_HINTS = {
+    errno.EACCES: "permission denied",
+    errno.EPERM: "operation not permitted",
+    errno.ENOSPC: "no space left on the device",
+    errno.EROFS: "the file system is read-only",
+    errno.ENAMETOOLONG: "the path is too long",
+    getattr(errno, "EDQUOT", -1): "disk quota exceeded",
+}
+
+
+def describe_os_error(exc: OSError, action: str) -> str:
+    """One readable line for an OS failure, e.g. 'Writing frames failed: no space left on the device (D:/x.exr).'"""
+    hint = _OS_HINTS.get(exc.errno or 0) or (exc.strerror or str(exc))
+    where = exc.filename or ""
+    if getattr(exc, "winerror", None) == 206:  # Windows: filename or extension too long
+        hint = "the path is too long (enable Windows long paths or use a shorter projects root)"
+    return f"{action} failed: {hint}" + (f" ({where})" if where else ".")
