@@ -121,13 +121,16 @@ only**, never pipeline data: the EXRs are the deliverable and are never touched 
 ### Remembered settings per shot
 
 After a successful conversion (GUI or CLI), the resolution, resize mode, input and output colour spaces and
-OCIO config are saved for that project + shot. The next conversion of the same shot, with any task, starts
-from them. Element, version and start frame are never remembered.
+OCIO config are saved for that project + shot. A dry run, a cancelled or a failed conversion saves nothing. The
+next conversion of the same shot, with any task, starts from them. Element, version and start frame are never
+remembered. Project and shot are matched ignoring case and surrounding spaces (`proj` finds `PROJ`).
 
 * CLI: options you leave out come from memory (a note on stderr lists them); options you pass always win.
   `--no-recall` ignores the memory for one run. With a remembered resolution, `--resolution` can be omitted.
-* GUI: typing a known project + shot fills those fields and shows a note under *Shot information*. Fields
-  you changed by hand just before are kept.
+* GUI: as soon as Project + Shot name a remembered shot, those fields are loaded (replacing whatever was there)
+  and a note appears under *Shot information*. Changes you make afterwards are kept until the shot changes.
+  The log shows the file's location at start-up, where each conversion saved its settings, and any problem
+  reading or writing the file. The CLI prints the same on stdout/stderr.
 * The file is per user (never in the repository or the project folders); `$SHOT2EXR_HISTORY` overrides it:
 
 | OS | Remembered settings file |

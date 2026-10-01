@@ -93,7 +93,12 @@ def apply_recalled_settings(args: argparse.Namespace) -> list[str]:
     Explicit options always win. Returns ``name=value`` for every remembered value used.
     """
     used: list[str] = []
-    memo = None if args.no_recall else shot_memory.recall(args.project, args.shot)
+    memo = None
+    if not args.no_recall:
+        try:
+            memo = shot_memory.recall(args.project, args.shot)
+        except shot_memory.HistoryError as exc:
+            print(f"shot2exr: warning: {exc}", file=sys.stderr)
     for attr, field in RECALLED.items():
         value = (memo or {}).get(field)
         if attr == "resize_mode" and value not in [m.value for m in ResizeMode]:
@@ -264,6 +269,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"\n{result.status.upper()}: {result.frames_written} frame(s) in {result.output_directory}")
             for err in result.errors:
                 print(f"ERROR: {err}", file=sys.stderr)
+            for warning in result.warnings:
+                if warning not in plan.warnings:
+                    print(f"WARNING: {warning}", file=sys.stderr)
+            if result.settings_saved_to:
+                print(f"Settings remembered for {shot_memory.shot_key(args.project, args.shot)} in {result.settings_saved_to}")
             if result.report_path:
                 print(f"Report: {result.report_path}")
         return result.exit_code

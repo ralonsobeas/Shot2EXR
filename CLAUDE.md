@@ -115,6 +115,9 @@ QT_QPA_PLATFORM=offscreen python -m pytest
 - Video frame count: `nb_frames`, else exact packet count (`-count_packets`), else duration estimate (warned).
 - Rotation metadata, non-square pixels and interlacing are reported, not corrected (decode ignores rotation).
 - Video cancel is checked between frames; FFmpeg is killed on cancel/failure.
+- Shot memory: keys are upper-cased (`PROJ/0010_020`); GUI recall replaces fields on every project/shot change
+  (an earlier "keep hand edits" rule made recall look broken); read/write problems raise `HistoryError` and are
+  shown in the GUI log / CLI stderr, never swallowed. Saved only after a successful real conversion.
 - Review movie cost (4-core container, 2K, conda env): video 0.34 -> 0.76 s/frame. Most of it is the exact
   ACES 2.0 view on CPU (~1.3 CPU-s per 2K frame, run in 16 strips on a thread pool). A baked 65^3 lut3d in
   FFmpeg was ~4x cheaper but up to 0.14 off at gamut extremes, so it was not used. Random-noise EXR
