@@ -51,9 +51,13 @@ class Inspection:
 
 
 def detect_source_type(path: Path) -> SourceType:
-    if not path.exists():
+    try:
+        missing, is_dir = not path.exists(), path.is_dir()
+    except OSError as exc:
+        raise InputError(describe_os_error(exc, f"Opening the input {path}")) from None
+    if missing:
         raise InputError(f"Input path does not exist: {path}")
-    if path.is_dir():
+    if is_dir:
         return SourceType.EXR_SEQUENCE
     suffix = path.suffix.lower()
     if suffix in config.VIDEO_EXTENSIONS:
@@ -267,10 +271,10 @@ def _estimated_output_bytes(plan: ConversionPlan) -> int:
 
 
 def _check_free_space(plan: ConversionPlan, out: Path) -> None:
-    existing = next((p for p in (out, *out.parents) if p.exists()), None)
-    if existing is None or not plan.frame_count:
-        return
-    try:
+    try:  # advisory only: an unreadable path is reported by the output checks, not here
+        existing = next((p for p in (out, *out.parents) if p.exists()), None)
+        if existing is None or not plan.frame_count:
+            return
         free = shutil.disk_usage(existing).free
     except OSError:
         return
@@ -280,10 +284,42 @@ def _check_free_space(plan: ConversionPlan, out: Path) -> None:
                              f"{need / 1e9:.1f} GB (uncompressed estimate).")
 
 
+def blocked_ancestor(path: Path) -> Path | None:
+    """The deepest folder above ``path`` that exists but cannot be opened (no read/search permission)."""
+    reachable = None
+    for p in (*reversed(path.parents), path):
+        try:
+            p.stat()
+        except PermissionError:
+            return reachable
+        except OSError:
+            return None  # missing from here down: not a permission problem
+        reachable = p
+    return None
+
+
+def describe_access_error(path: Path, exc: OSError) -> str:
+    """Readable text for an OS error while checking ``path``, naming the folder that blocks access."""
+    if isinstance(exc, PermissionError):
+        blocked = blocked_ancestor(path)
+        where = f"the folder {blocked} cannot be opened by this user" if blocked else "permission denied"
+        return (f"Cannot access the output location {path}: {where}. Fix the permissions on that folder "
+                "(or the storage mount), or choose a different projects root, element or version.")
+    return describe_os_error(exc, f"Checking the output location {path}")
+
+
 def _check_output(plan: ConversionPlan) -> None:
-    req = plan.request
     out = Path(plan.location.directory)
+    try:
+        _check_output_directory(plan, out)
+    except OSError as exc:  # e.g. a folder on the mount the user cannot open: a clear error, never a traceback
+        plan.error(ExitCode.OUTPUT, describe_access_error(out, exc))
+        return
     _check_free_space(plan, out)
+
+
+def _check_output_directory(plan: ConversionPlan, out: Path) -> None:
+    req = plan.request
     if out.exists() and not out.is_dir():
         plan.error(ExitCode.OUTPUT, f"Output path exists and is not a directory: {out}")
         return
@@ -539,7 +575,10 @@ def run_conversion(plan: ConversionPlan, cfg: ColorConfig, *, progress: Progress
 
     started = datetime.now(timezone.utc).astimezone()
     out_dir = Path(plan.location.directory)
-    existed = out_dir.is_dir()
+    try:
+        existed = out_dir.is_dir()
+    except OSError:
+        existed = False  # creating the staging directory below then fails with a reported error
     token = uuid.uuid4().hex[:8]
     if existed:
         staging = out_dir / f".shot2exr-inprogress-{token}"

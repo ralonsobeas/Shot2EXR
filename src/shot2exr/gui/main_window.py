@@ -654,11 +654,18 @@ class MainWindow(QMainWindow):
 
     def _start_dir(self) -> str:
         current = Path(self.input_edit.text().strip())
-        return str(current.parent if current.is_file() else current) if self.input_edit.text().strip() else ""
+        try:
+            return str(current.parent if current.is_file() else current) if self.input_edit.text().strip() else ""
+        except OSError:
+            return ""
 
     def _update_open_buttons(self) -> None:
         loc = self._location
-        self.open_folder_btn.setEnabled(bool(loc) and Path(loc.directory).is_dir())
+        try:
+            folder_exists = bool(loc) and Path(loc.directory).is_dir()
+        except OSError:  # unreadable mount: the dry run reports it; the preview must not crash
+            folder_exists = False
+        self.open_folder_btn.setEnabled(folder_exists)
 
     def _open_output_folder(self) -> None:
         if self._location:
