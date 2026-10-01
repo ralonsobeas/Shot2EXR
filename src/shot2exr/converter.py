@@ -457,6 +457,7 @@ class ConversionResult:
     warnings: list[str] = field(default_factory=list)
     duration_s: float = 0.0
     failure_code: ExitCode = ExitCode.ERROR  # exit code of the error that stopped a failed run
+    settings_saved_to: Path | None = None  # shot_history.json, when this run's settings were remembered
 
     @property
     def ok(self) -> bool:
@@ -471,7 +472,8 @@ class ConversionResult:
     def to_dict(self) -> dict[str, Any]:
         return {"status": self.status, "output_directory": str(self.output_directory),
                 "report": str(self.report_path) if self.report_path else None, "frames_written": self.frames_written,
-                "errors": self.errors, "warnings": self.warnings, "duration_s": self.duration_s}
+                "errors": self.errors, "warnings": self.warnings, "duration_s": self.duration_s,
+                "settings_saved_to": str(self.settings_saved_to) if self.settings_saved_to else None}
 
 
 ProgressCallback = Callable[[int, int, str], None]
@@ -645,6 +647,7 @@ def run_conversion(plan: ConversionPlan, cfg: ColorConfig, *, progress: Progress
     attrs = _output_attributes(cfg, plan)
     warnings = [w for w in plan.warnings if "will be created" not in w]
     written: list[str] = []
+    settings_saved_to: Path | None = None
     status, errors = STATUS_FAILED, []
     failure_code = ExitCode.ERROR
     interrupt: BaseException | None = None
@@ -762,9 +765,12 @@ def run_conversion(plan: ConversionPlan, cfg: ColorConfig, *, progress: Progress
     else:
         for stale in (STATUS_FAILED, STATUS_CANCELLED):
             report_path(out_dir, plan.basename, stale).unlink(missing_ok=True)
-        shot_memory.remember(plan.request)  # next conversion of this shot starts from these settings
+        try:  # the next conversion of this shot starts from these settings
+            settings_saved_to = shot_memory.remember(plan.request)
+        except shot_memory.HistoryError as exc:
+            warnings.append(str(exc))
     result = ConversionResult(status, out_dir, rpath, len(written) if status == STATUS_SUCCESS else 0, errors,
-                              warnings, report["general"]["processing_duration_s"], failure_code)
+                              warnings, report["general"]["processing_duration_s"], failure_code, settings_saved_to)
     if interrupt is not None:
         raise interrupt
     return result

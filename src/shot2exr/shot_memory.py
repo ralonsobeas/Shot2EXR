@@ -28,23 +28,36 @@ def history_path() -> Path:
     return Path(env).expanduser() if env else user_config_dir() / FILENAME
 
 
+class HistoryError(Exception):
+    """The remembered-settings file could not be read or written (the message names the file)."""
+
+
 def shot_key(project: str | None, shot: str | None) -> str | None:
-    project, shot = (project or "").strip(), (shot or "").strip()
+    """``PROJECT/SHOT``, upper-cased and stripped, so ``proj``/``PROJ `` find the same entry."""
+    project, shot = (project or "").strip().upper(), (shot or "").strip().upper()
     return f"{project}/{shot}" if project and shot else None
 
 
 def load_history(path: Path | None = None) -> dict[str, dict[str, Any]]:
-    """Every remembered shot; an unreadable or damaged file counts as empty (it is only a convenience)."""
+    """Every remembered shot. A missing file is empty; an unreadable or damaged one raises ``HistoryError``."""
+    path = path or history_path()
     try:
-        data = json.loads((path or history_path()).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
         return {}
+    except OSError as exc:
+        raise HistoryError(f"Cannot read the remembered settings file {path}: {exc.strerror or exc}") from None
+    except ValueError as exc:
+        raise HistoryError(f"The remembered settings file {path} is damaged ({exc}); delete it to start again.") from None
     shots = data.get("shots") if isinstance(data, dict) else None
-    return {k: v for k, v in shots.items() if isinstance(v, dict)} if isinstance(shots, dict) else {}
+    if not isinstance(shots, dict):
+        return {}
+    # Keys are normalised on read too, so entries written by older versions (case as typed) still match.
+    return {shot_key(*k.split("/", 1)) if "/" in k else k: v for k, v in shots.items() if isinstance(v, dict)}
 
 
 def recall(project: str | None, shot: str | None, path: Path | None = None) -> dict[str, Any] | None:
-    """The settings last used for this project + shot, or ``None``."""
+    """The settings last used for this project + shot, or ``None``. Raises ``HistoryError`` if the file is unreadable."""
     key = shot_key(project, shot)
     entry = load_history(path).get(key) if key else None
     if not entry:
@@ -53,12 +66,15 @@ def recall(project: str | None, shot: str | None, path: Path | None = None) -> d
 
 
 def remember(request: ConversionRequest, path: Path | None = None) -> Path | None:
-    """Store the settings of a successful conversion. Best effort: returns ``None`` if the file can't be written."""
+    """Store the settings of a successful conversion and return the file. Raises ``HistoryError`` on failure."""
     key = shot_key(request.project, request.shot)
     if not key:
         return None
     path = path or history_path()
-    shots = load_history(path)
+    try:
+        shots = load_history(path)
+    except HistoryError:
+        shots = {}  # a damaged file is replaced; an unreadable one fails again on write below
     shots[key] = {
         "resolution": str(request.output_resolution),
         "resize_mode": request.resize_mode.value,
@@ -75,8 +91,8 @@ def remember(request: ConversionRequest, path: Path | None = None) -> Path | Non
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump({"version": 1, "shots": dict(sorted(shots.items()))}, fh, indent=2)
         os.replace(tmp, path)
-    except OSError:
+    except OSError as exc:
         if tmp:
             Path(tmp).unlink(missing_ok=True)
-        return None
+        raise HistoryError(f"Cannot save remembered settings to {path}: {exc.strerror or exc}") from None
     return path
