@@ -25,15 +25,18 @@ def current_platform() -> str:
     return sys.platform  # unsupported platforms get a clear "no projects_root" message
 
 
+def user_config_dir() -> Path:
+    """Per-user config folder: ``%APPDATA%\\Shot2EXR`` on Windows, ``~/.config/shot2exr`` on Linux."""
+    if current_platform() == "windows":
+        return Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming") / "Shot2EXR"
+    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "shot2exr"
+
+
 def user_settings_path() -> Path:
     env = os.environ.get("SHOT2EXR_SETTINGS", "").strip()
     if env:
         return Path(env).expanduser()
-    if current_platform() == "windows":
-        base = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming")
-        return base / "Shot2EXR" / "settings.toml"
-    base = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
-    return base / "shot2exr" / "settings.toml"
+    return user_config_dir() / "settings.toml"
 
 
 @dataclass

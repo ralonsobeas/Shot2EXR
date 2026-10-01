@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QSpinBox, QSplitter, QVBoxLayout, QWidget,
 )
 
-from shot2exr import TOOL_NAME, __version__, config, naming
+from shot2exr import TOOL_NAME, __version__, config, naming, shot_memory
 from shot2exr.cli import format_inspection, format_plan
 from shot2exr.color_manager import ColorConfig, load_config
 from shot2exr.converter import ConversionPlan, ConversionResult, Inspection, inspect_source, plan_conversion
@@ -23,6 +23,7 @@ from shot2exr.gui.workers import ConversionTask, EngineTask
 from shot2exr.models import ConversionRequest, DetectionState, Resolution, ResizeMode
 from shot2exr.output_paths import OutputLocation, resolve_output_location
 from shot2exr.settings import Settings, current_platform, load_settings, save_settings
+from shot2exr.validation import parse_resolution
 
 AUTO = config.DEFAULT_INPUT_COLORSPACE
 
@@ -51,6 +52,9 @@ class MainWindow(QMainWindow):
         self._location: OutputLocation | None = None
         self._conversion: ConversionTask | None = None
         self._report_path: Path | None = None
+        self._recalled_key: str | None = None  # project/shot whose remembered settings were last looked up
+        self._edited: set[str] = set()  # remembered fields changed by hand since then: a recall keeps them
+        self._applying = False
 
         left = QWidget()
         left_layout = QVBoxLayout(left)
@@ -132,8 +136,14 @@ class MainWindow(QMainWindow):
         for label, w in (("Project", self.project_edit), ("Shot", self.shot_edit), ("Task", self.task_edit),
                          ("Element / Subtask", self.element_edit), ("Version", self.version_edit), ("Start Frame", self.start_spin)):
             form.addRow(label, w)
+        self.recall_label = QLabel("")
+        self.recall_label.setObjectName("muted")
+        self.recall_label.setWordWrap(True)
+        form.addRow("", self.recall_label)
         for edit in (self.project_edit, self.shot_edit, self.task_edit, self.element_edit, self.version_edit):
             edit.textChanged.connect(self._update_preview)
+        for edit in (self.project_edit, self.shot_edit):
+            edit.textChanged.connect(self.recall_shot_settings)
         self.start_spin.valueChanged.connect(self._update_preview)
         return box
 
@@ -144,6 +154,7 @@ class MainWindow(QMainWindow):
         self.ocio_edit = QLineEdit()
         self.ocio_edit.setPlaceholderText("Empty = $OCIO, else built-in ACES studio config")
         self.ocio_edit.editingFinished.connect(self._load_ocio_config)
+        self.ocio_edit.textEdited.connect(lambda _t: self._mark_edited("ocio_config"))
         ocio_browse = QPushButton("Browse...")
         ocio_browse.clicked.connect(self._browse_ocio)
         row.addWidget(self.ocio_edit, 1)
@@ -158,6 +169,8 @@ class MainWindow(QMainWindow):
         for combo in (self.input_cs, self.output_cs):
             combo.setMaxVisibleItems(25)
         self.input_cs.currentTextChanged.connect(self._update_detection_display)
+        self.input_cs.activated.connect(lambda _i: self._mark_edited("input_colorspace"))  # user picks only
+        self.output_cs.activated.connect(lambda _i: self._mark_edited("output_colorspace"))
         form.addRow("Input Color Space", self.input_cs)
         form.addRow("Output Color Space", self.output_cs)
         self.detect_label = QLabel("Not inspected")
@@ -208,6 +221,7 @@ class MainWindow(QMainWindow):
             spin.setRange(1, 32768)
             spin.setValue(val)
             spin.valueChanged.connect(self._update_preview)
+            spin.valueChanged.connect(lambda _v: self._mark_edited("resolution"))
         self.use_source_res = QPushButton("Use Source")
         self.use_source_res.setEnabled(False)
         self.use_source_res.clicked.connect(self._use_source_resolution)
@@ -221,6 +235,7 @@ class MainWindow(QMainWindow):
         self.resize_combo = QComboBox()
         for mode in ResizeMode:
             self.resize_combo.addItem(mode.value.capitalize(), mode)
+        self.resize_combo.activated.connect(lambda _i: self._mark_edited("resize_mode"))
         form.addRow("Resize Mode", self.resize_combo)
         self.overwrite_check = QCheckBox("Overwrite existing output files")
         self.overwrite_check.setToolTip("Off by default. Existing frames of this version are only replaced when enabled.")
@@ -361,6 +376,63 @@ class MainWindow(QMainWindow):
             self.inspect_source()
         else:
             self._update_detection_display()
+
+    # ------------------------------------------------------------------ remembered shot settings
+
+    def _mark_edited(self, name: str) -> None:
+        if not self._applying:
+            self._edited.add(name)
+
+    def recall_shot_settings(self) -> None:
+        """Fill resolution, resize mode, colour spaces and OCIO config from the last conversion of this shot.
+
+        Fields changed by hand since the last lookup are kept as they are.
+        """
+        key = shot_memory.shot_key(self.project_edit.text(), self.shot_edit.text())
+        if key == self._recalled_key:
+            return
+        self._recalled_key = key
+        memo = shot_memory.recall(self.project_edit.text(), self.shot_edit.text()) if key else None
+        if not memo:
+            self.recall_label.setText("")
+            return
+        kept, applied = sorted(self._edited), []
+        self._applying = True
+        try:
+            if "ocio_config" not in self._edited and (memo.get("ocio_config") or "") != self.ocio_edit.text().strip():
+                self.ocio_edit.setText(memo.get("ocio_config") or "")
+                self._load_ocio_config()
+                applied.append("OCIO config")
+            for name, combo, label in (("input_colorspace", self.input_cs, "input colour space"),
+                                       ("output_colorspace", self.output_cs, "output colour space")):
+                value = memo.get(name)
+                if name not in self._edited and value and combo.findText(value) >= 0:
+                    combo.setCurrentText(value)
+                    applied.append(label)
+            if "resolution" not in self._edited and memo.get("resolution"):
+                try:
+                    res = parse_resolution(memo["resolution"])
+                except ValidationError:
+                    res = None
+                if res:
+                    self.width_spin.setValue(res.width)
+                    self.height_spin.setValue(res.height)
+                    applied.append(f"resolution {res}")
+            if "resize_mode" not in self._edited and memo.get("resize_mode"):
+                index = self.resize_combo.findData(next((m for m in ResizeMode if m.value == memo["resize_mode"]), None))
+                if index >= 0:
+                    self.resize_combo.setCurrentIndex(index)
+                    applied.append(f"{memo['resize_mode']} resize")
+        finally:
+            self._applying = False
+        self._edited.clear()
+        when = str(memo.get("updated", ""))[:10]
+        text = f"Settings remembered for {key} (last used for task {memo.get('task', '?')}, {when})"
+        if kept:
+            text += f"; kept your changes to {', '.join(k.replace('_', ' ') for k in kept)}"
+        self.recall_label.setText(text + ".")
+        self.statusBar().showMessage(text + ".")
+        self._log(f"{text}: {', '.join(applied) or 'already set'}.")
 
     # ------------------------------------------------------------------ source
 
@@ -604,6 +676,7 @@ class MainWindow(QMainWindow):
         self._report_path = result.report_path
         self.open_report_btn.setEnabled(bool(result.report_path and Path(result.report_path).is_file()))
         if result.ok:
+            self._edited.clear()  # these settings are now the ones remembered for this shot
             self._set_result(f"Conversion complete: {result.frames_written} frames in {result.output_directory}", OK)
             self._log(f"SUCCESS: {result.frames_written} frames written to {result.output_directory}")
         else:
@@ -645,6 +718,7 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, "Select OCIO config", "", "OCIO config (*.ocio *.ocioz);;All files (*)")
         if path:
             self.ocio_edit.setText(path)
+            self._mark_edited("ocio_config")
             self._load_ocio_config()
 
     def _browse_output(self) -> None:

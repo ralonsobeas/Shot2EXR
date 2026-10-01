@@ -10,7 +10,7 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from shot2exr import TOOL_NAME, __version__, config
+from shot2exr import TOOL_NAME, __version__, config, shot_memory
 from shot2exr.color_manager import load_config
 from shot2exr.converter import ConversionPlan, Inspection, environment_info, inspect_source, plan_conversion, run_conversion
 from shot2exr.errors import ExitCode, Shot2EXRError, describe_os_error
@@ -36,14 +36,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version-number", "--vn", dest="version", metavar="VERSION",
                    help="Output version, e.g. 001 or v001. (--version prints the tool version.)")
     p.add_argument("--start-frame", type=int)
-    p.add_argument("--resolution", help="Output WIDTHxHEIGHT, e.g. 2048x1152.")
-    p.add_argument("--input-colorspace", default=config.DEFAULT_INPUT_COLORSPACE, help="OCIO colour space or 'auto' (default).")
-    p.add_argument("--output-colorspace", default=config.DEFAULT_OUTPUT_COLORSPACE, help="Default: %(default)s.")
+    p.add_argument("--resolution", help="Output WIDTHxHEIGHT, e.g. 2048x1152 (default: remembered for this shot).")
+    p.add_argument("--input-colorspace", help="OCIO colour space or 'auto' (default: remembered for this shot, else auto).")
+    p.add_argument("--output-colorspace",
+                   help=f"Default: remembered for this shot, else {config.DEFAULT_OUTPUT_COLORSPACE}.")
     p.add_argument("--projects-root", help="Override the projects root from the settings file for this run.")
     p.add_argument("-o", "--output-dir", help="Advanced: write into this exact directory instead of the automatic project structure.")
     p.add_argument("--settings", help="Settings TOML (default: $SHOT2EXR_SETTINGS or the per-user settings file).")
     p.add_argument("--ocio-config", help="OCIO config path or ocio:// URI (default: $OCIO, else the built-in studio config).")
-    p.add_argument("--resize-mode", choices=[m.value for m in ResizeMode], default=config.DEFAULT_RESIZE_MODE)
+    p.add_argument("--resize-mode", choices=[m.value for m in ResizeMode],
+                   help=f"Default: remembered for this shot, else {config.DEFAULT_RESIZE_MODE}.")
+    p.add_argument("--no-recall", action="store_true",
+                   help="Ignore the settings remembered for this project + shot (they are still saved after the run).")
     p.add_argument("--overwrite", action="store_true", help="Allow replacing existing output files.")
     p.add_argument("--dry-run", action="store_true", help="Validate and show what would be written; never writes files.")
     p.add_argument("--accept-inferred-colorspace", action="store_true", help="Confirm an INFERRED input colour space.")
@@ -74,6 +78,33 @@ def _version_arg_fixup(argv: list[str]) -> list[str]:
             out.append(arg)
         i += 1
     return out
+
+
+# Options a successful conversion remembers per project + shot: argparse name -> history field.
+RECALLED = {"resolution": "resolution", "resize_mode": "resize_mode", "input_colorspace": "input_colorspace",
+            "output_colorspace": "output_colorspace", "ocio_config": "ocio_config"}
+BUILTIN_DEFAULTS = {"resize_mode": config.DEFAULT_RESIZE_MODE, "input_colorspace": config.DEFAULT_INPUT_COLORSPACE,
+                    "output_colorspace": config.DEFAULT_OUTPUT_COLORSPACE}
+
+
+def apply_recalled_settings(args: argparse.Namespace) -> list[str]:
+    """Fill options left out on the command line: remembered for this shot, else the built-in default.
+
+    Explicit options always win. Returns ``name=value`` for every remembered value used.
+    """
+    used: list[str] = []
+    memo = None if args.no_recall else shot_memory.recall(args.project, args.shot)
+    for attr, field in RECALLED.items():
+        value = (memo or {}).get(field)
+        if attr == "resize_mode" and value not in [m.value for m in ResizeMode]:
+            value = None
+        if getattr(args, attr) in (None, "") and value:
+            setattr(args, attr, value)
+            used.append(f"{attr.replace('_', '-')}={value}")
+    for attr, default in BUILTIN_DEFAULTS.items():
+        if getattr(args, attr) in (None, ""):
+            setattr(args, attr, default)
+    return used
 
 
 # --------------------------------------------------------------------------- text output
@@ -132,6 +163,9 @@ def format_plan(plan: ConversionPlan) -> str:
     _kv(lines, "Output frame range", f"{o['start_frame']}-{o['end_frame']} ({o['frame_count']} frames)" if o["end_frame"] is not None else None)
     _kv(lines, "EXR", f"{o['exr_pixel_type']} float, {o['exr_compression']}, alpha={o['alpha']}")
     _kv(lines, "Report", o["report"])
+    m = o["review_movie"]
+    _kv(lines, "Review movie", f"{m['file']} ({m['codec']}, {m['fps']} fps {m['fps_origin']}, "
+                               f"{m['display']} / {m['view']}; review only)")
     if o["filenames_preview"]:
         lines.append("  Expected files:")
         lines += [f"    {n}" for n in o["filenames_preview"]]
@@ -195,6 +229,10 @@ def main(argv: list[str] | None = None) -> int:
             _emit(args, insp.to_dict(), format_inspection(insp))
             return ExitCode.OK
 
+        recalled = apply_recalled_settings(args)
+        if recalled:
+            print(f"shot2exr: using settings remembered for {shot_memory.shot_key(args.project, args.shot)} "
+                  f"({', '.join(recalled)}); pass the option to change it, or --no-recall.", file=sys.stderr)
         missing = [f"--{n.replace('_', '-')}" for n in REQUIRED_FOR_PLAN if getattr(args, n) in (None, "")]
         if missing:
             print(f"shot2exr: error: missing required option(s): {', '.join(missing)}", file=sys.stderr)

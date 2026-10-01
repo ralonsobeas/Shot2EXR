@@ -39,7 +39,8 @@ def test_cli_exr_conversion(make_exr_sequence, tmp_path, capsys):
     out = tmp_path / "out"
     assert main(_args(src, out, "--resolution", "64x36")) == ExitCode.OK
     assert sorted(p.name for p in out.iterdir()) == [
-        "PROJ_0010_020_comp_v001.1009.exr", "PROJ_0010_020_comp_v001.1010.exr", "PROJ_0010_020_comp_v001.conversion_report.json"]
+        "PROJ_0010_020_comp_v001.1009.exr", "PROJ_0010_020_comp_v001.1010.exr", "PROJ_0010_020_comp_v001.conversion_report.json",
+        "PROJ_0010_020_comp_v001.mov"]
     assert "SUCCESS: 2 frame(s)" in capsys.readouterr().out
 
 

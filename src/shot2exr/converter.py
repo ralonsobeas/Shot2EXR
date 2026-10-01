@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from shot2exr import TOOL_NAME, __version__, config, naming
+from shot2exr import TOOL_NAME, __version__, config, naming, shot_memory
 from shot2exr.color_manager import ColorConfig, ColorPipeline, load_config, ocio_version
 from shot2exr.colorspace_detector import PRIMARIES, detect_exr, gamut_of_interop, detect_video
 from shot2exr.errors import ExitCode, InputError, OutputError, Shot2EXRError, describe_os_error
@@ -32,6 +32,7 @@ from shot2exr.models import (
     ColorDetection, ConversionRequest, DetectionState, Resolution, SourceInfo, SourceType,
 )
 from shot2exr.output_paths import OutputLocation, resolve_output_location
+from shot2exr.review_movie import NOTE as REVIEW_NOTE, ReviewMovieWriter, movie_fps
 from shot2exr.report import STATUS_CANCELLED, STATUS_FAILED, STATUS_SUCCESS, build_report, report_path, write_report
 from shot2exr.resize import ResizeGeometry, apply_geometry, compute_geometry
 from shot2exr.sequence_detector import find_sequence
@@ -171,6 +172,7 @@ class ConversionPlan:
     frame_range: tuple[int, int] | None = None
     geometry: ResizeGeometry | None = None
     collisions: list[str] = field(default_factory=list)
+    review_display: tuple[str, str] | None = None  # (display, view) of the review movie
     warnings: list[str] = field(default_factory=list)
     errors: list[PlanIssue] = field(default_factory=list)
 
@@ -189,6 +191,18 @@ class ConversionPlan:
         if not self.frame_count:
             return []
         return list(naming.output_filenames(self.basename, self.request.start_frame, self.frame_count))
+
+    @property
+    def movie_filename(self) -> str:
+        return naming.movie_filename(self.basename)
+
+    def review_movie(self) -> dict[str, Any]:
+        """How the review movie will be made (the same block goes in the report)."""
+        src = self.inspection.source if self.inspection else None
+        fps, origin = movie_fps(src.fps if src and src.source_type is SourceType.VIDEO else None)
+        display, view = self.review_display or (None, None)
+        return {"file": self.movie_filename, "codec": config.REVIEW_MOVIE_CODEC, "fps": fps, "fps_origin": origin,
+                "display": display, "view": view, "note": REVIEW_NOTE}
 
     def to_dict(self) -> dict[str, Any]:
         req = self.request
@@ -216,6 +230,7 @@ class ConversionPlan:
                 "element": req.element,
                 "pattern": naming.output_pattern(self.basename),
                 "report": naming.report_filename(self.basename),
+                "review_movie": self.review_movie(),
                 "start_frame": self.frame_range[0] if self.frame_range else req.start_frame,
                 "end_frame": self.frame_range[1] if self.frame_range else None,
                 "frame_count": self.frame_count,
@@ -342,8 +357,8 @@ def _check_output_directory(plan: ConversionPlan, out: Path) -> None:
         plan.error(ExitCode.OUTPUT, f"Cannot list output directory {out}: {exc}")
         return
     expected = set(plan.output_filenames())
-    report = naming.report_filename(plan.basename)
-    plan.collisions = sorted(expected & existing) + ([report] if report in existing else [])
+    extras = [naming.report_filename(plan.basename), plan.movie_filename]
+    plan.collisions = sorted(expected & existing) + [n for n in extras if n in existing]
     if plan.collisions and not req.overwrite:
         plan.error(ExitCode.OUTPUT, f"{len(plan.collisions)} output file(s) already exist (e.g. {plan.collisions[0]}); enable overwrite to replace them.")
     elif plan.collisions:
@@ -409,11 +424,18 @@ def plan_conversion(request: ConversionRequest, cfg: ColorConfig | None = None,
         except Shot2EXRError as exc:
             plan.error(exc.exit_code, exc.message)
 
-    if src.source_type is SourceType.VIDEO:
+    if plan.output_colorspace:
         try:
-            resolve_executable("ffmpeg", req.ffmpeg_path)
+            cfg.display_processor(plan.output_colorspace)
+            plan.review_display = cfg.review_display_view()
         except Shot2EXRError as exc:
             plan.error(exc.exit_code, exc.message)
+    try:  # FFmpeg decodes video input and always encodes the review movie
+        resolve_executable("ffmpeg", req.ffmpeg_path)
+    except Shot2EXRError as exc:
+        plan.error(exc.exit_code, exc.message)
+    if src.source_type is SourceType.EXR_SEQUENCE:
+        plan.warnings.append(f"The review movie uses {config.REVIEW_MOVIE_DEFAULT_FPS} fps (EXR input has no frame rate).")
     if plan.frame_count and plan.location:
         _check_output(plan)
     return plan
@@ -554,6 +576,36 @@ def _output_attributes(cfg: ColorConfig, plan: ConversionPlan) -> dict[str, Any]
     return attrs
 
 
+def review_rgb(processor: Any | None, px: Any, pool: ThreadPoolExecutor | None = None) -> Any:
+    """Display-referred RGB copy of a converted frame for the review movie (the EXR pixels stay untouched).
+
+    Premultiplied RGB is shown as-is, which is the frame composited over black. With ``pool``, horizontal
+    strips are transformed in parallel (OCIO releases the GIL; an ACES 2.0 view costs ~1 s per 2K frame on
+    one core).
+    """
+    import numpy as np
+
+    rgb = np.array(px[..., :3], dtype=np.float32, copy=True, order="C")
+    if processor is not None:
+        if pool is None:
+            processor.applyRGB(rgb)
+        else:
+            strips = np.array_split(rgb, 16, axis=0)  # contiguous row views of rgb
+            list(pool.map(processor.applyRGB, [s for s in strips if s.size]))
+    return rgb
+
+
+def _validate_movie(path: Path, frames: int, target: Resolution, ffprobe_path: str | None) -> None:
+    if not path.is_file() or path.stat().st_size == 0:
+        raise OutputError(f"The review movie {path.name} was not written.")
+    info = probe_video(path, ffprobe_path)
+    if info.frame_count != frames:
+        raise OutputError(f"The review movie {path.name} has {info.frame_count} frames, expected {frames}.")
+    even = Resolution(target.width + target.width % 2, target.height + target.height % 2)
+    if info.resolution != even:
+        raise OutputError(f"The review movie {path.name} is {info.resolution}, expected {even}.")
+
+
 def run_conversion(plan: ConversionPlan, cfg: ColorConfig, *, progress: ProgressCallback | None = None,
                    cancel: threading.Event | None = None) -> ConversionResult:
     """Convert every source frame, one at a time, into ``plan.location.directory``.
@@ -567,11 +619,13 @@ def run_conversion(plan: ConversionPlan, cfg: ColorConfig, *, progress: Progress
         raise Shot2EXRError("The conversion plan has unresolved problems; run a dry run to see them.",
                             [e.message for e in plan.errors])
     src = plan.inspection.source
+    ffmpeg = resolve_executable("ffmpeg", plan.request.ffmpeg_path)
     decoder: VideoDecoder | None = None
     if src.source_type is SourceType.VIDEO:
         decode = plan.inspection.detection.decode or {"yuv_to_rgb": True, "matrix": "bt709", "range": "tv"}
-        decoder = VideoDecoder(resolve_executable("ffmpeg", plan.request.ffmpeg_path), Path(src.path),
-                               src.resolution, decode, bool(src.has_alpha))
+        decoder = VideoDecoder(ffmpeg, Path(src.path), src.resolution, decode, bool(src.has_alpha))
+    movie_info = plan.review_movie()
+    review = cfg.display_processor(plan.output_colorspace)
 
     started = datetime.now(timezone.utc).astimezone()
     out_dir = Path(plan.location.directory)
@@ -587,6 +641,7 @@ def run_conversion(plan: ConversionPlan, cfg: ColorConfig, *, progress: Progress
     target = plan.request.output_resolution
     names = plan.output_filenames()
     pipeline, transforms = processing_steps(cfg, plan)
+    movie_frames = 0
     attrs = _output_attributes(cfg, plan)
     warnings = [w for w in plan.warnings if "will be created" not in w]
     written: list[str] = []
@@ -604,12 +659,22 @@ def run_conversion(plan: ConversionPlan, cfg: ColorConfig, *, progress: Progress
             # background threads while this one is colour converted and resized. At most one frame
             # waits on each side, so memory stays at a few frames whatever the sequence length.
             frames = stack.enter_context(_Prefetch(_source_frames(src, decoder)))
+            # The review movie is encoded alongside, in its own thread (in order); EXR writing does not wait on it.
+            movie = stack.enter_context(ReviewMovieWriter(ffmpeg, staging / plan.movie_filename,
+                                                          target.width, target.height, movie_info["fps"]))
+            review_pool = stack.enter_context(ThreadPoolExecutor(max_workers=max(1, min(8, os.cpu_count() or 1)),
+                                                                 thread_name_prefix="shot2exr-review"))
+            encoder = stack.enter_context(ThreadPoolExecutor(max_workers=1, thread_name_prefix="shot2exr-movie"))
             writer = stack.enter_context(ThreadPoolExecutor(max_workers=1, thread_name_prefix="shot2exr-write"))
-            pending: Future | None = None
+            pending: list[Future] = []
+
+            def encode(px) -> None:
+                movie.write(review_rgb(review, px, review_pool))
 
             def finish_pending() -> None:
-                if pending is not None:
-                    pending.result()  # re-raises a write error here
+                if pending:
+                    for job in pending:
+                        job.result()  # re-raises a write or encode error here
                     written.append(names[len(written)])
                     if progress:
                         progress(len(written), total, written[-1])
@@ -625,9 +690,13 @@ def run_conversion(plan: ConversionPlan, cfg: ColorConfig, *, progress: Progress
                     px = apply_geometry(px, plan.geometry)
                 px = ColorPipeline.apply(pipeline.post, px)
                 finish_pending()
-                pending = writer.submit(write_frame, staging / names[i], px, frame.channels, {**attrs, **source_attrs})
+                pending = [writer.submit(write_frame, staging / names[i], px, frame.channels, {**attrs, **source_attrs}),
+                           encoder.submit(encode, px)]  # both only read px
             finish_pending()
-            pending = None
+            pending = []
+            if len(written) == total:
+                movie.finish()
+            movie_frames = movie.frames_written
         if len(written) != total:
             raise InputError(f"The source produced {len(written)} frames but {total} were expected "
                              f"(frame count from {src.frame_count_method}). Nothing was written.")
@@ -640,6 +709,7 @@ def run_conversion(plan: ConversionPlan, cfg: ColorConfig, *, progress: Progress
             hdr = read_header(staging / name)
             if (hdr.width, hdr.height) != (target.width, target.height):
                 raise OutputError(f"{name} is {hdr.width}x{hdr.height}, expected {target}.")
+        _validate_movie(staging / plan.movie_filename, total, target, plan.request.ffprobe_path)
         status = STATUS_SUCCESS
     except ConversionCancelled as exc:
         status, errors = STATUS_CANCELLED, [exc.message]
@@ -657,8 +727,9 @@ def run_conversion(plan: ConversionPlan, cfg: ColorConfig, *, progress: Progress
     finished = datetime.now(timezone.utc).astimezone()
     report = build_report(plan, status=status, started=started, finished=finished, transforms=transforms,
                           frames_written=len(written) if status == STATUS_SUCCESS else 0,
-                          files=names if status == STATUS_SUCCESS else [], errors=errors, warnings=warnings,
+                          files=names + [plan.movie_filename] if status == STATUS_SUCCESS else [], errors=errors, warnings=warnings,
                           validation_passed=status == STATUS_SUCCESS)
+    report["output"]["review_movie"] = {**movie_info, "frames": movie_frames if status == STATUS_SUCCESS else 0}
     if decoder is not None:
         report["input"]["timing"] = src.extra.get("timing")
         report["input"]["frames_decoded"] = decoder.frames_decoded
@@ -691,6 +762,7 @@ def run_conversion(plan: ConversionPlan, cfg: ColorConfig, *, progress: Progress
     else:
         for stale in (STATUS_FAILED, STATUS_CANCELLED):
             report_path(out_dir, plan.basename, stale).unlink(missing_ok=True)
+        shot_memory.remember(plan.request)  # next conversion of this shot starts from these settings
     result = ConversionResult(status, out_dir, rpath, len(written) if status == STATUS_SUCCESS else 0, errors,
                               warnings, report["general"]["processing_duration_s"], failure_code)
     if interrupt is not None:
