@@ -4,43 +4,21 @@ Converts a MOV/MP4 video or an existing EXR sequence into a correctly named, OCI
 EXR sequence (`PROJECT_SHOT_TASK_vVVV.FRAME.exr`) plus a JSON conversion report.
 One engine, two front ends: a PySide6 GUI (`shot2exr-gui`) and a CLI (`shot2exr`).
 
-> **Status: Milestone 3.** EXR sequence -> EXR and MOV/MP4 -> EXR conversion work end to end in GUI
+> **Status: Milestone 4.** EXR sequence -> EXR and MOV/MP4 -> EXR conversion work end to end in GUI
 > and CLI (FFmpeg decode, OCIO colour conversion, FIT/FILL/STRETCH resize, half-float ZIP EXRs, JSON report).
+> Standalone bundles for Rocky Linux 9 and Windows are built and tested in CI; see [INSTALL.md](INSTALL.md).
 
-## Install (development)
+## Install
 
-All native dependencies (Qt, OpenImageIO, OpenColorIO, FFmpeg) come from **conda-forge**, so no
-root/sudo or system packages are needed. Use Miniforge or micromamba.
-
-### Rocky Linux 9 (bash)
+[INSTALL.md](INSTALL.md) covers the standalone bundle (no Python or conda needed), the conda
+development setup on Rocky Linux 9 and Windows, the desktop libraries the GUI needs on a minimal
+Rocky 9 install, and troubleshooting. Quick start from source:
 
 ```bash
-# If conda isn't installed yet (user-level, no sudo):
-curl -LO https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh
-bash Miniforge3-Linux-x86_64.sh -b -p "$HOME/miniforge3" && source "$HOME/miniforge3/bin/activate"
-
-cd Shot2EXR
-conda env create -f environment.yml
-conda activate shot2exr
+conda env create -f environment.yml && conda activate shot2exr
 python -m pip install -e . --no-deps
+shot2exr --check-environment      # tests OIIO, OCIO, FFmpeg, Qt and settings; exit 6 if one is broken
 ```
-
-The GUI needs a desktop session (X11 or Wayland). On a minimal/server install the Qt xcb plugin
-may need these libraries (ask an admin; `sudo` required):
-`sudo dnf install mesa-libEGL mesa-libGL libxkbcommon-x11 xcb-util-cursor fontconfig`.
-Qt picks Wayland or X11 automatically; to force X11 (e.g. Wayland issues): `export QT_QPA_PLATFORM=xcb`.
-
-### Windows 10/11 (PowerShell, Miniforge Prompt)
-
-```powershell
-cd Shot2EXR
-conda env create -f environment.yml
-conda activate shot2exr
-python -m pip install -e . --no-deps
-```
-
-`--no-deps` keeps pip from replacing the conda-forge builds. (Pip-only alternative, not the
-supported path: `pip install -e .[pip,test]` with FFmpeg on PATH.)
 
 ## Launch
 
@@ -102,7 +80,7 @@ shot2exr --input "/source/clip.mov" --project GOD --shot 0046_005 --task ml --el
 
 Other options: `--projects-root`, `--output-dir`, `--settings`, `--ocio-config`, `--resize-mode fit|fill|stretch`, `--overwrite`,
 `--accept-inferred-colorspace`, `--ffmpeg-path`, `--ffprobe-path`, `--list-colorspaces`,
-`--env-info`, `--json` (machine-readable output). On Windows PowerShell use a backtick `` ` ``
+`--env-info`, `--check-environment`, `--json` (machine-readable output). On Windows PowerShell use a backtick `` ` ``
 instead of `\` for line continuation.
 
 An EXR directory containing several sequences is rejected; pass the path of one frame
@@ -139,5 +117,9 @@ removes its partial frames and leaves `...conversion_report.FAILED.json` / `.CAN
 
 ```bash
 QT_QPA_PLATFORM=offscreen python -m pytest      # PowerShell: $env:QT_QPA_PLATFORM="offscreen"; python -m pytest
+shot2exr-gui --self-test                        # opens the main window, closes it, exits 0
+python tools/benchmark.py --frames 48           # seconds per frame and peak memory (not a test)
+python packaging/build.py --test                # standalone bundle + distribution smoke test
 ```
-Test media (EXR, MOV/MP4) is generated on the fly; nothing large is committed.
+Test media (EXR, MOV/MP4) is generated on the fly; nothing large is committed. `tests/test_end_to_end.py`
+runs the installed `shot2exr` / `shot2exr-gui` commands as separate processes.

@@ -1,8 +1,15 @@
-# Planned CI (not yet executed: no GitHub repository is attached yet).
-# Linux runs inside a Rocky Linux 9 container; ubuntu-latest alone is not proof of Rocky 9 compatibility.
+# Tests and standalone builds. Linux runs inside Rocky Linux 9 containers; ubuntu-latest alone is not
+# proof of Rocky 9 compatibility. Each bundle is built on its target OS, then tested on a clean
+# machine (no conda, no Python packages) by packaging/smoke_test.py.
 name: tests
 
 on: [push, pull_request]
+
+env:
+  # Desktop libraries the GUI needs on Rocky 9 (documented in INSTALL.md; keep both in sync).
+  ROCKY9_GUI_PACKAGES: >-
+    libglvnd-opengl libglvnd-egl libglvnd-glx mesa-libGL mesa-libEGL fontconfig libxkbcommon-x11
+    xcb-util-cursor xcb-util-wm xcb-util-keysyms xcb-util-renderutil xcb-util-image
 
 jobs:
   rocky9:
@@ -12,19 +19,23 @@ jobs:
       run:
         shell: bash -el {0}
     steps:
-      - name: System libraries for headless Qt (offscreen/xcb)
-        run: dnf install -y git mesa-libEGL mesa-libGL libxkbcommon libxkbcommon-x11 fontconfig xcb-util-cursor xorg-x11-server-Xvfb
+      - name: System libraries for the GUI and Xvfb
+        run: dnf install -y git $ROCKY9_GUI_PACKAGES xorg-x11-server-Xvfb
       - uses: actions/checkout@v4
       - uses: mamba-org/setup-micromamba@v2
         with:
           environment-file: environment.yml
           cache-environment: true
       - run: python -m pip install -e . --no-deps
+      - name: Environment check
+        run: shot2exr --check-environment
       - run: python -m pytest -v
         env:
           QT_QPA_PLATFORM: offscreen
-      - name: GUI smoke test on the X11 (xcb) platform plugin
-        run: xvfb-run -a python -m pytest -v tests/test_gui.py
+      - name: GUI tests and GUI startup on the X11 (xcb) platform plugin
+        run: |
+          xvfb-run -a python -m pytest -v tests/test_gui.py
+          xvfb-run -a shot2exr-gui --self-test
         env:
           QT_QPA_PLATFORM: xcb
 
@@ -40,6 +51,93 @@ jobs:
           environment-file: environment.yml
           cache-environment: true
       - run: python -m pip install -e . --no-deps
+      - name: Environment check
+        run: shot2exr --check-environment
       - run: python -m pytest -v
         env:
           QT_QPA_PLATFORM: offscreen
+      - name: GUI startup on the native Windows platform plugin
+        run: shot2exr-gui --self-test
+
+  package-rocky9:
+    runs-on: ubuntu-latest
+    container: rockylinux:9
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - run: dnf install -y git $ROCKY9_GUI_PACKAGES
+      - uses: actions/checkout@v4
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: environment.yml
+          create-args: pyinstaller>=6.10
+          cache-environment: true
+      - run: python -m pip install -e . --no-deps
+      - name: Build and smoke-test the bundle in the build env
+        run: python packaging/build.py --test --gui offscreen
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Shot2EXR-linux-x86_64
+          path: dist/Shot2EXR-*-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  dist-rocky9:
+    needs: package-rocky9
+    runs-on: ubuntu-latest
+    container: rockylinux:9
+    steps:
+      - name: Minimal Rocky 9 (system Python only, no conda, no desktop libraries)
+        run: dnf install -y python3 tar gzip
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: Shot2EXR-linux-x86_64
+      - run: tar -xzf Shot2EXR-*-linux-x86_64.tar.gz -C /opt && cat /opt/Shot2EXR/BUILD_INFO.txt
+      - name: CLI on a minimal install (no extra packages)
+        run: python3 packaging/smoke_test.py /opt/Shot2EXR --gui skip
+      - name: Environment check before desktop libraries (expected to report the GUI libraries)
+        run: /opt/Shot2EXR/shot2exr-cli --check-environment || true
+      - name: Install only the documented desktop libraries, plus Xvfb as a stand-in display
+        run: dnf install -y $ROCKY9_GUI_PACKAGES xorg-x11-server-Xvfb
+      - name: Full distribution test including GUI startup on xcb
+        run: python3 packaging/smoke_test.py /opt/Shot2EXR --gui xcb
+
+  package-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: environment.yml
+          create-args: pyinstaller>=6.10
+          cache-environment: true
+      - run: python -m pip install -e . --no-deps
+      - name: Build and smoke-test the bundle in the build env
+        run: python packaging/build.py --test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Shot2EXR-windows-x64
+          path: dist/Shot2EXR-*-windows-x64.zip
+          if-no-files-found: error
+
+  dist-windows:
+    needs: package-windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: Shot2EXR-windows-x64
+      - name: Unpack outside the checkout
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem Shot2EXR-*-windows-x64.zip | Select-Object -First 1
+          Expand-Archive $zip.FullName -DestinationPath "$env:RUNNER_TEMP\app"
+          Get-Content "$env:RUNNER_TEMP\app\Shot2EXR\BUILD_INFO.txt"
+      - name: Full distribution test (runner Python, no conda)
+        shell: pwsh
+        run: python packaging\smoke_test.py "$env:RUNNER_TEMP\app\Shot2EXR"

@@ -23,6 +23,7 @@ envs/
 build/
 dist/
 *.spec
+!packaging/shot2exr.spec
 *.manifest
 *.exe
 *.msi

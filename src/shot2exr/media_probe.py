@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
@@ -25,8 +26,21 @@ _RGB_PIX_FMT = re.compile(r"^(gbr|rgb|bgr|argb|abgr|x?rgb|x?bgr)")
 COLOR_KEYS = ("color_primaries", "color_transfer", "color_space", "color_range", "chroma_location")
 
 
+def bundled_executable(name: str) -> Path | None:
+    """``ffmpeg``/``ffprobe`` shipped inside a standalone (PyInstaller) bundle, if running from one."""
+    if not getattr(sys, "frozen", False):
+        return None
+    base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+    exe = name + (".exe" if os.name == "nt" else "")
+    for candidate in (base / "ffmpeg" / exe, base / exe):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def resolve_executable(name: str, override: str | os.PathLike | None = None) -> Path:
-    """Find ``ffmpeg``/``ffprobe``: explicit override, then PATH (the conda env puts them there)."""
+    """Find ``ffmpeg``/``ffprobe``: explicit override, then the copy bundled with a standalone build,
+    then PATH (the conda env puts them there)."""
     if override:
         candidate = Path(override).expanduser()
         if candidate.is_file():
@@ -35,6 +49,9 @@ def resolve_executable(name: str, override: str | os.PathLike | None = None) -> 
         if found:
             return Path(found)
         raise DependencyError(f"{name} not found at {str(override)!r}.")
+    bundled = bundled_executable(name)
+    if bundled:
+        return bundled
     found = shutil.which(name)
     if not found:
         raise DependencyError(

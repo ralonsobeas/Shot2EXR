@@ -106,3 +106,41 @@ def test_conversion_in_worker(app, make_exr_sequence, tmp_path):
     assert w.open_report_btn.isEnabled() and not w.cancel_btn.isEnabled()
     assert (out / "GOD_0046_005_ml_v001.conversion_report.json").is_file()
     w.close()
+
+
+def test_video_conversion_in_worker(app, make_video, tmp_path):
+    from shot2exr.gui.main_window import MainWindow
+
+    src = make_video("clip.mov", frames=6)
+    out = tmp_path / "out"
+    w = MainWindow()
+    for edit, text in ((w.project_edit, "GOD"), (w.shot_edit, "0046_005"), (w.task_edit, "ml"),
+                       (w.element_edit, "water"), (w.output_edit, str(out)), (w.input_edit, str(src))):
+        edit.setText(text)
+    w.manual_check.setChecked(True)
+    w.accept_inferred.setChecked(True)
+    w.width_spin.setValue(160)
+    w.height_spin.setValue(90)
+    w.start_conversion()
+    _wait(app, w)
+    assert "Conversion complete: 6 frames" in w.result_label.text(), w.result_label.text()
+    assert len(list(out.glob("GOD_0046_005_ml_v001.*.exr"))) == 6
+    w.close()
+
+
+def test_help_menu_environment_check(app):
+    from shot2exr.gui.main_window import MainWindow
+
+    w = MainWindow()
+    _wait(app, w)
+    w._check_environment()
+    _wait(app, w, timeout=60)
+    log = w.log.toPlainText()
+    assert "environment check" in log and "OpenImageIO" in log and "RESULT:" in log
+    w.close()
+
+
+def test_gui_self_test_entry_point(app):
+    from shot2exr.gui.main import main
+
+    assert main(["shot2exr-gui", "--self-test"]) == 0
