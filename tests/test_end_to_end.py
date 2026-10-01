@@ -16,7 +16,7 @@ import pytest
 from shot2exr.exr_reader import read_header
 
 pytest.importorskip("OpenImageIO")
-BASE = "GOD_0046_005_ml_v003"
+BASE = "PROJ_0010_020_comp_v003"
 
 
 def _command(env_var: str, name: str, module: str) -> list[str]:
@@ -41,11 +41,11 @@ def projects(tmp_path, isolated_settings):
     root.mkdir()
     isolated_settings.write_text(
         f'[paths.linux]\nprojects_root = "{root.as_posix()}"\n[paths.windows]\nprojects_root = "{root.as_posix()}"\n'
-        '[projects]\nGOD = "GodOfTides"\n[tasks]\nml = "MachineLearning"\n')
+        '[projects]\nPROJ = "MyProject"\n[tasks]\ncomp = "Compositing"\n')
     return root
 
 
-SHOT = ["--project", "GOD", "--shot", "0046_005", "--task", "ml", "--element", "water", "--version", "003",
+SHOT = ["--project", "PROJ", "--shot", "0010_020", "--task", "comp", "--element", "water", "--version", "003",
         "--start-frame", "1001"]
 
 
@@ -65,7 +65,7 @@ def test_exr_sequence_end_to_end(projects, make_exr_sequence):
     src = make_exr_sequence(range(1, 5), attrs={"colorInteropID": "lin_ap0_scene"}, size=(64, 36))
     res = run("-i", src, *SHOT, "--resolution", "96x54", "--resize-mode", "fit")
     assert res.returncode == 0, res.stderr
-    vdir = projects / "GodOfTides/VFX/GOD_0046/GOD_0046_005/Tasks/MachineLearning/ComfyUI/water" / BASE
+    vdir = projects / "MyProject/VFX/PROJ_0010/PROJ_0010_020/Tasks/Compositing/ComfyUI/water" / BASE
     frames = sorted(p.name for p in vdir.glob("*.exr"))
     assert frames == [f"{BASE}.{n}.exr" for n in range(1001, 1005)]
     hdr = read_header(vdir / frames[0])
@@ -97,7 +97,7 @@ def test_error_exit_codes(projects, tmp_path):
     bad.write_text("x")
     assert run("-i", bad, *SHOT, "--resolution", "64x36").returncode == 3
     assert run("-i", bad, *SHOT, "--resolution", "64").returncode == 2
-    assert run("-i", bad, "--project", "GOD").returncode == 2
+    assert run("-i", bad, "--project", "PROJ").returncode == 2
 
 
 def test_gui_self_test_process():

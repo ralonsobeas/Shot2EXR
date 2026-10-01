@@ -10,11 +10,11 @@ from shot2exr.models import ConversionRequest, Resolution
 from shot2exr.output_paths import resolve_output_location, sequence_from_shot
 from shot2exr.settings import Settings, load_settings, save_settings
 
-WIN_EXPECTED = r"T:\Volumes\Projects\GodOfTides\VFX\GOD_0046\GOD_0046_005\Tasks\MachineLearning\ComfyUI\water\GOD_0046_005_ml_v001"
+WIN_EXPECTED = r"P:\Projects\MyProject\VFX\PROJ_0010\PROJ_0010_020\Tasks\Compositing\ComfyUI\water\PROJ_0010_020_comp_v001"
 
 
 def _loc(settings, platform, **kw):
-    args = dict(project="GOD", shot="0046_005", task="ml", element="water", version="001")
+    args = dict(project="PROJ", shot="0010_020", task="comp", element="water", version="001")
     args.update(kw)
     return resolve_output_location(settings=settings, platform=platform, **args)
 
@@ -22,17 +22,20 @@ def _loc(settings, platform, **kw):
 @pytest.fixture
 def settings():
     s = load_settings()  # bundled defaults (user file isolated by conftest)
-    s.roots["linux"] = "/mnt/prod/projects"
+    s.roots.update(windows="P:/Projects", linux="/mnt/prod/projects")
+    s.projects["PROJ"] = "MyProject"
+    s.tasks["comp"] = "Compositing"
     return s
 
 
-def test_defaults_ship_initial_mappings_and_empty_linux_root():
+def test_defaults_ship_no_studio_values(isolated_settings):
+    isolated_settings.unlink()
     s = load_settings()
-    assert s.projects == {"GOD": "GodOfTides"} and s.tasks == {"ml": "MachineLearning"}
-    assert s.projects_root("windows") == "T:/Volumes/Projects" and s.projects_root("linux") == ""
+    assert s.projects == {} and s.tasks == {}
+    assert s.projects_root("windows") == "" and s.projects_root("linux") == ""
 
 
-@pytest.mark.parametrize("shot,seq", [("0046_005", "0046"), ("0001_010", "0001"), ("0046", "0046"), ("A10_020_b", "A10")])
+@pytest.mark.parametrize("shot,seq", [("0010_020", "0010"), ("0001_010", "0001"), ("0010", "0010"), ("A10_020_b", "A10")])
 def test_sequence_from_shot_keeps_leading_zeros(shot, seq):
     assert sequence_from_shot(shot) == seq
 
@@ -46,7 +49,7 @@ def test_windows_path_construction(settings):
 def test_rocky_linux_path_construction(settings):
     loc = _loc(settings, "linux", version="v12", element="smoke")
     assert loc.directory == PurePosixPath(
-        "/mnt/prod/projects/GodOfTides/VFX/GOD_0046/GOD_0046_005/Tasks/MachineLearning/ComfyUI/smoke/GOD_0046_005_ml_v012")
+        "/mnt/prod/projects/MyProject/VFX/PROJ_0010/PROJ_0010_020/Tasks/Compositing/ComfyUI/smoke/PROJ_0010_020_comp_v012")
 
 
 def test_empty_linux_root_is_a_clear_config_error():
@@ -55,7 +58,7 @@ def test_empty_linux_root_is_a_clear_config_error():
 
 
 def test_projects_root_override_and_relative_root(settings):
-    assert str(_loc(settings, "linux", projects_root="/other").directory).startswith("/other/GodOfTides/")
+    assert str(_loc(settings, "linux", projects_root="/other").directory).startswith("/other/MyProject/")
     with pytest.raises(ConfigError):
         _loc(settings, "linux", projects_root="relative/root")
 
@@ -64,7 +67,7 @@ def test_unmapped_codes(settings):
     with pytest.raises(ConfigError, match="project code 'XYZ'"):
         _loc(settings, "linux", project="XYZ")
     with pytest.raises(ConfigError, match=r"\[tasks\]"):
-        _loc(settings, "linux", task="comp")
+        _loc(settings, "linux", task="lgt")
 
 
 @pytest.mark.parametrize("element", ["", "../water", "a/b", "a\\b", "fire smoke", ".."])
@@ -81,8 +84,8 @@ def test_manual_override_wins(settings, tmp_path):
 def test_user_settings_file_adds_mappings(isolated_settings):
     isolated_settings.write_text('[paths.linux]\nprojects_root = "/prod"\n[projects]\nABC = "AlphaBetaCharlie"\n[tasks]\ncomp = "Compositing"\n')
     s = load_settings()
-    assert s.projects == {"GOD": "GodOfTides", "ABC": "AlphaBetaCharlie"} and s.tasks["comp"] == "Compositing"
-    assert str(_loc(s, "linux", project="ABC", task="comp").directory).startswith("/prod/AlphaBetaCharlie/VFX/ABC_0046/")
+    assert s.projects == {"ABC": "AlphaBetaCharlie"} and s.tasks["comp"] == "Compositing"
+    assert str(_loc(s, "linux", project="ABC", task="comp").directory).startswith("/prod/AlphaBetaCharlie/VFX/ABC_0010/")
 
 
 def test_save_settings_round_trip(isolated_settings):
@@ -95,7 +98,7 @@ def test_save_settings_round_trip(isolated_settings):
 # ------------------------------------------------------------------ dry run integration
 
 def _req(src, **kw):
-    base = dict(input_path=Path(src), project="GOD", shot="0046_005", task="ml", element="water", version="001",
+    base = dict(input_path=Path(src), project="PROJ", shot="0010_020", task="comp", element="water", version="001",
                 start_frame=1009, output_resolution=Resolution(2048, 1152), dry_run=True)
     base.update(kw)
     return ConversionRequest(**base)
@@ -111,7 +114,7 @@ def test_dry_run_auto_directory_creates_nothing(ocio_cfg, exr_src, tmp_path):
     root.mkdir()
     plan = plan_conversion(_req(exr_src, projects_root=str(root)), ocio_cfg, settings=load_settings())
     assert plan.ok, plan.errors
-    expected = root / "GodOfTides/VFX/GOD_0046/GOD_0046_005/Tasks/MachineLearning/ComfyUI/water/GOD_0046_005_ml_v001"
+    expected = root / "MyProject/VFX/PROJ_0010/PROJ_0010_020/Tasks/Compositing/ComfyUI/water/PROJ_0010_020_comp_v001"
     assert Path(plan.location.directory) == expected
     d = plan.to_dict()["output"]
     assert d["directory"] == str(expected) and d["element"] == "water" and d["directory_origin"] == "auto"
@@ -125,22 +128,22 @@ def test_dry_run_reports_unmounted_root(ocio_cfg, exr_src, tmp_path):
 
 def test_dry_run_missing_linux_root_is_config_error(ocio_cfg, exr_src):
     plan = plan_conversion(_req(exr_src), ocio_cfg, settings=Settings(roots={"linux": "", "windows": ""},
-                                                                     projects={"GOD": "GodOfTides"}, tasks={"ml": "MachineLearning"}))
+                                                                     projects={"PROJ": "MyProject"}, tasks={"comp": "Compositing"}))
     assert plan.exit_code is ExitCode.CONFIG and plan.location is None
 
 
 def test_existing_version_directory_and_collisions(ocio_cfg, exr_src, tmp_path):
     root = tmp_path / "Projects"
-    vdir = root / "GodOfTides/VFX/GOD_0046/GOD_0046_005/Tasks/MachineLearning/ComfyUI/water/GOD_0046_005_ml_v001"
+    vdir = root / "MyProject/VFX/PROJ_0010/PROJ_0010_020/Tasks/Compositing/ComfyUI/water/PROJ_0010_020_comp_v001"
     vdir.mkdir(parents=True)
     plan = plan_conversion(_req(exr_src, projects_root=str(root)), ocio_cfg, settings=load_settings())
     assert plan.ok  # empty existing version directory is fine
     (vdir / "notes.txt").write_text("x")
     plan = plan_conversion(_req(exr_src, projects_root=str(root)), ocio_cfg, settings=load_settings())
     assert plan.exit_code is ExitCode.OUTPUT and "not empty" in plan.errors[0].message
-    (vdir / "GOD_0046_005_ml_v001.1009.exr").write_bytes(b"")
+    (vdir / "PROJ_0010_020_comp_v001.1009.exr").write_bytes(b"")
     plan = plan_conversion(_req(exr_src, projects_root=str(root)), ocio_cfg, settings=load_settings())
-    assert plan.collisions == ["GOD_0046_005_ml_v001.1009.exr"] and not plan.ok
+    assert plan.collisions == ["PROJ_0010_020_comp_v001.1009.exr"] and not plan.ok
     plan = plan_conversion(_req(exr_src, projects_root=str(root), overwrite=True), ocio_cfg, settings=load_settings())
     assert plan.ok
 
@@ -158,12 +161,12 @@ def test_cli_auto_directory(exr_src, tmp_path, capsys, isolated_settings):
 
     root = tmp_path / "Projects"
     root.mkdir()
-    args = ["--input", str(exr_src), "--project", "GOD", "--shot", "0046_005", "--task", "ml", "--element", "water",
+    args = ["--input", str(exr_src), "--project", "PROJ", "--shot", "0010_020", "--task", "comp", "--element", "water",
             "--version", "001", "--start-frame", "1009", "--resolution", "2048x1152", "--input-colorspace", "auto",
             "--output-colorspace", "ACEScg", "--dry-run", "--json"]
     assert main(args + ["--projects-root", str(root)]) == ExitCode.OK
     out = json.loads(capsys.readouterr().out)["output"]
-    assert out["directory"].endswith("ComfyUI/water/GOD_0046_005_ml_v001".replace("/", __import__("os").sep))
+    assert out["directory"].endswith("ComfyUI/water/PROJ_0010_020_comp_v001".replace("/", __import__("os").sep))
     # No root configured for this OS (the shipped Linux default; set explicitly so Windows behaves the same).
     isolated_settings.write_text('[paths.linux]\nprojects_root = ""\n[paths.windows]\nprojects_root = ""\n')
     assert main(args) == ExitCode.CONFIG

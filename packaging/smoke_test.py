@@ -73,7 +73,7 @@ def main() -> None:
         root.mkdir()
         root_toml = root.as_posix()
         settings.write_text(f'[paths.linux]\nprojects_root = "{root_toml}"\n[paths.windows]\nprojects_root = "{root_toml}"\n'
-                            '[projects]\nGOD = "GodOfTides"\n[tasks]\nml = "MachineLearning"\n', encoding="utf-8")
+                            '[projects]\nPROJ = "MyProject"\n[tasks]\ncomp = "Compositing"\n', encoding="utf-8")
         env = {"SHOT2EXR_SETTINGS": str(settings)}
 
         step("make a ProRes 422 HQ test MOV with the bundled FFmpeg")
@@ -85,14 +85,14 @@ def main() -> None:
              "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709", "-color_range", "tv", mov],
             env=ff_env)
 
-        shot = ["--project", "GOD", "--shot", "0046_005", "--task", "ml", "--element", "water"]
+        shot = ["--project", "PROJ", "--shot", "0010_020", "--task", "comp", "--element", "water"]
         step("MOV -> EXR (automatic project directory)")
         res = run([cli, "-i", mov, *shot, "--version", "001", "--start-frame", "1001", "--resolution", "320x180",
                    "--accept-inferred-colorspace", "--json"], env=env)
         result = json.loads(res.stdout)["result"]
         v1 = Path(result["output_directory"])
-        frames = sorted(v1.glob("GOD_0046_005_ml_v001.*.exr"))
-        expected_dir = root / "GodOfTides/VFX/GOD_0046/GOD_0046_005/Tasks/MachineLearning/ComfyUI/water/GOD_0046_005_ml_v001"
+        frames = sorted(v1.glob("PROJ_0010_020_comp_v001.*.exr"))
+        expected_dir = root / "MyProject/VFX/PROJ_0010/PROJ_0010_020/Tasks/Compositing/ComfyUI/water/PROJ_0010_020_comp_v001"
         if v1.resolve() != expected_dir.resolve() or len(frames) != 24:
             sys.exit(f"FAILED: expected 24 frames in {expected_dir}, got {len(frames)} in {v1}")
         rep = json.loads(Path(result["report"]).read_text(encoding="utf-8"))

@@ -11,7 +11,7 @@ from shot2exr.models import ConversionRequest, Resolution
 
 
 def _req(src, out, **kw):
-    base = dict(input_path=Path(src), project="GOD", shot="0046_005", task="ml", version="001", start_frame=1009,
+    base = dict(input_path=Path(src), project="PROJ", shot="0010_020", task="comp", version="001", start_frame=1009,
                 output_resolution=Resolution(2048, 1152), element="water", output_directory=Path(out), dry_run=True)
     base.update(kw)
     return ConversionRequest(**base)
@@ -24,7 +24,7 @@ def test_exr_plan_ok(ocio_cfg, make_exr_sequence, tmp_path):
     plan = plan_conversion(_req(src, out), ocio_cfg)
     assert plan.ok, plan.errors
     assert plan.frame_range == (1009, 1012)
-    assert plan.output_filenames() == [f"GOD_0046_005_ml_v001.{f}.exr" for f in range(1009, 1013)]
+    assert plan.output_filenames() == [f"PROJ_0010_020_comp_v001.{f}.exr" for f in range(1009, 1013)]
     assert plan.input_colorspace == "ACEScg" and plan.input_colorspace_origin == "detected"
     assert len(plan.color_transforms) == 1 and plan.color_transforms[0].startswith("resize (lanczos3, in 'ACEScg')")
     assert list(out.iterdir()) == []  # dry run writes nothing
@@ -76,9 +76,9 @@ def test_output_collisions(ocio_cfg, make_exr_sequence, tmp_path):
     src = make_exr_sequence([1, 2], attrs={"colorInteropID": "lin_ap1_scene"})
     out = tmp_path / "out"
     out.mkdir()
-    (out / "GOD_0046_005_ml_v001.1010.exr").write_bytes(b"")
+    (out / "PROJ_0010_020_comp_v001.1010.exr").write_bytes(b"")
     plan = plan_conversion(_req(src, out), ocio_cfg)
-    assert plan.exit_code is ExitCode.OUTPUT and plan.collisions == ["GOD_0046_005_ml_v001.1010.exr"]
+    assert plan.exit_code is ExitCode.OUTPUT and plan.collisions == ["PROJ_0010_020_comp_v001.1010.exr"]
     plan = plan_conversion(_req(src, out, overwrite=True), ocio_cfg)
     assert plan.ok and any("overwritten" in w for w in plan.warnings)
 

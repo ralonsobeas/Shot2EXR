@@ -64,7 +64,7 @@ def format_frame(frame: int) -> str:
 
 
 def output_basename(project: str, shot: str, task: str, version: str | int) -> str:
-    """``GOD``, ``0046_005``, ``ml``, ``1`` -> ``GOD_0046_005_ml_v001``."""
+    """``PROJ``, ``0010_020``, ``comp``, ``1`` -> ``PROJ_0010_020_comp_v001``."""
     return "_".join(
         (
             validate_token(project, "Project"),

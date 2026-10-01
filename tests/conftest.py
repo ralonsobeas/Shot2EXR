@@ -10,8 +10,12 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def isolated_settings(tmp_path, monkeypatch):
-    """Never read or write the real per-user settings file during tests."""
+    """Never read or write the real per-user settings file during tests.
+
+    The shipped defaults carry no studio values, so tests get example mappings from a user file.
+    """
     path = tmp_path / "user_settings.toml"
+    path.write_text('[projects]\nPROJ = "MyProject"\n\n[tasks]\ncomp = "Compositing"\n', encoding="utf-8")
     monkeypatch.setenv("SHOT2EXR_SETTINGS", str(path))
     return path
 

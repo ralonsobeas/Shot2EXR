@@ -9,7 +9,7 @@ from shot2exr.validation import parse_resize_mode, parse_resolution, validate_re
 
 
 def _req(**kw):
-    base = dict(input_path=Path("in.mov"), project="GOD", shot="0046_005", task="ml", version="1",
+    base = dict(input_path=Path("in.mov"), project="PROJ", shot="0010_020", task="comp", version="1",
                 start_frame=1009, output_resolution=Resolution(2048, 1152), element="water", output_directory=Path("out"))
     base.update(kw)
     return ConversionRequest(**base)

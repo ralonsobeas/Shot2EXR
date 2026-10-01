@@ -5,7 +5,7 @@ from shot2exr.errors import ExitCode
 
 
 def _args(src, out, *extra):
-    return ["--input", str(src), "--project", "GOD", "--shot", "0046_005", "--task", "ml", "--element", "water", "--version", "001",
+    return ["--input", str(src), "--project", "PROJ", "--shot", "0010_020", "--task", "comp", "--element", "water", "--version", "001",
             "--start-frame", "1009", "--resolution", "2048x1152", "--input-colorspace", "auto",
             "--output-colorspace", "ACEScg", "--output-dir", str(out), *extra]
 
@@ -23,7 +23,7 @@ def test_spec_example_dry_run_json(make_exr_sequence, tmp_path, capsys):
     code = main(_args(src, tmp_path, "--dry-run", "--json", "--ocio-config", "ocio://studio-config-latest"))
     data = json.loads(capsys.readouterr().out)
     assert code == ExitCode.OK and data["ok"]
-    assert data["output"]["filenames_preview"][0] == "GOD_0046_005_ml_v001.1009.exr"
+    assert data["output"]["filenames_preview"][0] == "PROJ_0010_020_comp_v001.1009.exr"
     assert data["output"]["end_frame"] == 1012
 
 
@@ -39,7 +39,7 @@ def test_cli_exr_conversion(make_exr_sequence, tmp_path, capsys):
     out = tmp_path / "out"
     assert main(_args(src, out, "--resolution", "64x36")) == ExitCode.OK
     assert sorted(p.name for p in out.iterdir()) == [
-        "GOD_0046_005_ml_v001.1009.exr", "GOD_0046_005_ml_v001.1010.exr", "GOD_0046_005_ml_v001.conversion_report.json"]
+        "PROJ_0010_020_comp_v001.1009.exr", "PROJ_0010_020_comp_v001.1010.exr", "PROJ_0010_020_comp_v001.conversion_report.json"]
     assert "SUCCESS: 2 frame(s)" in capsys.readouterr().out
 
 

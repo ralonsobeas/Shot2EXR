@@ -50,7 +50,7 @@ Primary platform Rocky Linux 9, also Windows 10/11. Same codebase.
   Missing / corrupt / mismatched frames are `SourceInfo.errors` (inspection succeeds, planning fails).
 - Output dir (Amendment 1 in SPEC.md): `{root}/{ProjectFolder}/VFX/{P}_{SEQ}/{P}_{SHOT}/Tasks/{TaskFolder}/ComfyUI/{element}/{P}_{SHOT}_{task}_vNNN`.
   SEQ = first `_` component of shot (string, zeros kept). Element is required and validated like other tokens.
-  Linux root ships empty -> ConfigError (exit 8). Root must exist (unmounted storage is an error); deeper
+  Shipped defaults carry no studio values (both roots empty, no project/task mappings) -> ConfigError (exit 8) until the user or studio settings file sets them. Root must exist (unmounted storage is an error); deeper
   missing dirs are a warning ("created when conversion starts"). Auto mode: non-empty existing version dir
   is an error unless overwrite. Manual `--output-dir` override keeps the old per-file collision rules.
   Dry run never creates anything. GUI remembers the last element via QSettings.

@@ -81,7 +81,7 @@ To force X11 under a Wayland session, run `QT_QPA_PLATFORM=xcb Shot2EXR`.
 ```
 
 The bundle is not code-signed. SmartScreen may warn the first time; choose **More info > Run anyway**.
-Use a short folder path: project paths under `T:\Volumes\Projects\...` are long, so enable Windows
+Use a short folder path: production project paths are often long, so enable Windows
 long paths if a conversion reports "the path is too long".
 
 ### Verifying a bundle on a new machine

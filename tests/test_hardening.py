@@ -44,7 +44,7 @@ def test_disk_full_during_write_fails_with_output_code(ocio_cfg, seq, tmp_path, 
     _, res = convert(ocio_cfg, seq(3), out)
     assert res.status == "failed" and res.exit_code is ExitCode.OUTPUT
     assert "no space left on the device" in res.errors[0]
-    assert [p.name for p in out.iterdir()] == ["GOD_0046_005_ml_v001.conversion_report.FAILED.json"]
+    assert [p.name for p in out.iterdir()] == ["PROJ_0010_020_comp_v001.conversion_report.FAILED.json"]
 
 
 def test_unwritable_failure_report_does_not_crash(ocio_cfg, seq, tmp_path, monkeypatch):
@@ -64,7 +64,7 @@ def test_unwritable_failure_report_does_not_crash(ocio_cfg, seq, tmp_path, monke
 def test_low_disk_space_warns_in_plan(ocio_cfg, seq, tmp_path, monkeypatch):
     usage = namedtuple("usage", "total used free")
     monkeypatch.setattr(converter.shutil, "disk_usage", lambda p: usage(10, 10, 1000))
-    req = ConversionRequest(input_path=seq(2), project="GOD", shot="0046_005", task="ml", version="001",
+    req = ConversionRequest(input_path=seq(2), project="PROJ", shot="0010_020", task="comp", version="001",
                             start_frame=1009, output_resolution=Resolution(2048, 1152), element="water",
                             output_directory=tmp_path / "out")
     plan = plan_conversion(req, ocio_cfg)
@@ -91,7 +91,7 @@ def test_cli_unexpected_error_is_reported_not_traceback(monkeypatch, tmp_path, c
         raise RuntimeError("something unexpected")
 
     monkeypatch.setattr(cli, "plan_conversion", explode)
-    code = cli.main(["-i", str(seq(1)), "--project", "GOD", "--shot", "0046_005", "--task", "ml", "--element", "w",
+    code = cli.main(["-i", str(seq(1)), "--project", "PROJ", "--shot", "0010_020", "--task", "comp", "--element", "w",
                      "--version", "001", "--start-frame", "1001", "--resolution", "48x27", "-o", str(tmp_path / "o")])
     err = capsys.readouterr().err
     assert code == ExitCode.ERROR and "internal error: RuntimeError: something unexpected" in err
@@ -103,6 +103,6 @@ def test_failed_cli_conversion_returns_specific_exit_code(monkeypatch, tmp_path,
         raise OSError(errno.ENOSPC, "No space left on device", str(path))
 
     monkeypatch.setattr(converter, "write_frame", full)
-    code = cli.main(["-i", str(seq(2)), "--project", "GOD", "--shot", "0046_005", "--task", "ml", "--element", "w",
+    code = cli.main(["-i", str(seq(2)), "--project", "PROJ", "--shot", "0010_020", "--task", "comp", "--element", "w",
                      "--version", "001", "--start-frame", "1001", "--resolution", "48x27", "-o", str(tmp_path / "o")])
     assert code == ExitCode.OUTPUT and "no space left" in capsys.readouterr().err

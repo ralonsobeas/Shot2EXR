@@ -14,7 +14,7 @@ from shot2exr.video_reader import build_command
 
 np = pytest.importorskip("numpy")
 pytest.importorskip("OpenImageIO")
-BASE = "GOD_0046_005_ml_v001"
+BASE = "PROJ_0010_020_comp_v001"
 G24 = "Gamma 2.4 Encoded Rec.709"
 TAGS_709 = "color_primaries=bt709:color_trc=bt709:colorspace=bt709"
 
@@ -32,7 +32,7 @@ def ffmpeg(tmp_path, ffmpeg_bin):
 
 
 def convert(cfg, src, out, **kw):
-    params = dict(input_path=Path(src), project="GOD", shot="0046_005", task="ml", version="001", start_frame=1009,
+    params = dict(input_path=Path(src), project="PROJ", shot="0010_020", task="comp", version="001", start_frame=1009,
                   output_resolution=Resolution(32, 18), element="water", output_directory=Path(out),
                   accept_inferred_colorspace=True)
     params.update(kw)
@@ -148,8 +148,8 @@ def test_cli_video_conversion(make_video, tmp_path):
     from shot2exr.cli import main
 
     out = tmp_path / "out"
-    args = ["--input", str(make_video("cli clip.mp4", frames=4)), "--project", "GOD", "--shot", "0046_005",
-            "--task", "ml", "--element", "water", "--version", "1", "--start-frame", "1009", "--resolution", "64x36",
+    args = ["--input", str(make_video("cli clip.mp4", frames=4)), "--project", "PROJ", "--shot", "0010_020",
+            "--task", "comp", "--element", "water", "--version", "1", "--start-frame", "1009", "--resolution", "64x36",
             "--output-dir", str(out), "--accept-inferred-colorspace"]
     assert main(args) == 0
     assert len(list(out.glob("*.exr"))) == 4 and (out / f"{BASE}.conversion_report.json").is_file()
