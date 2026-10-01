@@ -31,9 +31,12 @@ ffmpeg_bins = [(_tool("ffmpeg"), "."), (_tool("ffprobe"), ".")]
 datas = collect_data_files("shot2exr")  # default_settings.toml
 binaries = ffmpeg_bins + collect_dynamic_libs("PyOpenColorIO") + collect_dynamic_libs("OpenImageIO")
 if sys.platform.startswith("linux"):
-    # PyInstaller treats libdrm as a host library, but OpenImageIO and FFmpeg (libavutil) link to it
-    # and a minimal Rocky 9 install doesn't have it. The conda-forge copy is a plain userspace library.
-    binaries.append((str(Path(sys.prefix) / "lib" / "libdrm.so.2"), "."))
+    # PyInstaller treats these as host libraries, but FFmpeg (libavutil/libavdevice) and therefore
+    # OpenImageIO link to them and a minimal Rocky 9 install has none of them. The conda-forge copies
+    # are plain userspace libraries (the other libxcb-* extensions are already bundled from conda).
+    # With them, the CLI needs nothing from the host but glibc; only Qt's OpenGL stack stays external.
+    for lib in ("libdrm.so.2", "libxcb.so.1", "libxcb-dri3.so.0"):
+        binaries.append((str(Path(sys.prefix) / "lib" / lib), "."))
 
 # Unused heavy modules: keep the bundle to QtCore/QtGui/QtWidgets.
 excludes = ["tkinter", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.QtQml", "PySide6.QtQuick",
