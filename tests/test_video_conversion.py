@@ -138,7 +138,7 @@ def test_video_cancel_stops_ffmpeg_and_keeps_nothing(ocio_cfg, make_video, tmp_p
 
 def test_decoder_command_is_explicit():
     cmd = build_command(Path("ffmpeg"), Path("/a b/c.mov"), {"yuv_to_rgb": True, "matrix": "smpte170m", "range": "pc"}, False)
-    assert "/a b/c.mov" in cmd and "-noautorotate" in cmd and cmd[cmd.index("-fps_mode") + 1] == "passthrough"
+    assert str(Path("/a b/c.mov")) in cmd and "-noautorotate" in cmd and cmd[cmd.index("-fps_mode") + 1] == "passthrough"
     assert "in_color_matrix=bt601" in cmd[cmd.index("-vf") + 1] and "in_range=pc" in cmd[cmd.index("-vf") + 1]
     rgb = build_command(Path("ffmpeg"), Path("x.mov"), {"yuv_to_rgb": False, "range": "pc"}, True)
     assert "in_color_matrix" not in rgb[rgb.index("-vf") + 1] and rgb[rgb.index("-pix_fmt") + 1] == "rgba64le"
