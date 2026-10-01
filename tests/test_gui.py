@@ -35,12 +35,12 @@ def test_window_launches_and_previews(app):
     w.show()
     assert w.output_cs.currentText() == "ACEScg" and w.input_cs.currentText() == "auto"
     assert w.start_btn.isEnabled() and not w.cancel_btn.isEnabled()
-    w.project_edit.setText("GOD")
-    w.shot_edit.setText("0046_005")
-    w.task_edit.setText("ml")
+    w.project_edit.setText("PROJ")
+    w.shot_edit.setText("0010_020")
+    w.task_edit.setText("comp")
     w.version_edit.setText("v1")
     w.start_spin.setValue(1009)
-    assert w.preview_label.text() == "GOD_0046_005_ml_v001.1009.exr"
+    assert w.preview_label.text() == "PROJ_0010_020_comp_v001.1009.exr"
     w.shot_edit.setText("../x")
     assert "invalid" in w.preview_label.text()
     w.close()
@@ -51,7 +51,7 @@ def test_inspect_and_dry_run_in_worker(app, make_exr_sequence, tmp_path):
 
     src = make_exr_sequence(range(1001, 1004), attrs={"colorInteropID": "lin_ap1_scene"})
     w = MainWindow()
-    for edit, text in ((w.project_edit, "GOD"), (w.shot_edit, "0046_005"), (w.task_edit, "ml"),
+    for edit, text in ((w.project_edit, "PROJ"), (w.shot_edit, "0010_020"), (w.task_edit, "comp"),
                        (w.element_edit, "water"), (w.output_edit, str(tmp_path))):
         edit.setText(text)
     w.manual_check.setChecked(True)
@@ -70,18 +70,19 @@ def test_automatic_output_directory_preview(app, isolated_settings, tmp_path):
     from shot2exr.gui.main_window import MainWindow
 
     isolated_settings.write_text(f'[paths.linux]\nprojects_root = "{tmp_path.as_posix()}"\n'
-                                 f'[paths.windows]\nprojects_root = "{tmp_path.as_posix()}"\n')
+                                 f'[paths.windows]\nprojects_root = "{tmp_path.as_posix()}"\n'
+                                 '[projects]\nPROJ = "MyProject"\n[tasks]\ncomp = "Compositing"\n')
     w = MainWindow()
-    for edit, text in ((w.project_edit, "GOD"), (w.shot_edit, "0046_005"), (w.task_edit, "ml"),
+    for edit, text in ((w.project_edit, "PROJ"), (w.shot_edit, "0010_020"), (w.task_edit, "comp"),
                        (w.element_edit, "water"), (w.version_edit, "1")):
         edit.setText(text)
-    expected = tmp_path / "GodOfTides/VFX/GOD_0046/GOD_0046_005/Tasks/MachineLearning/ComfyUI/water/GOD_0046_005_ml_v001"
+    expected = tmp_path / "MyProject/VFX/PROJ_0010/PROJ_0010_020/Tasks/Compositing/ComfyUI/water/PROJ_0010_020_comp_v001"
     assert w.resolved_edit.isReadOnly() and w.resolved_edit.text() == str(expected)
     w.element_edit.setText("../fire")
     assert "Element" in w.resolved_edit.text()
     w.element_edit.setText("fire")
     w.output_edit.setText(str(tmp_path / "manual"))
-    assert w.resolved_edit.text().endswith("fire" + __import__("os").sep + "GOD_0046_005_ml_v001")  # override off
+    assert w.resolved_edit.text().endswith("fire" + __import__("os").sep + "PROJ_0010_020_comp_v001")  # override off
     w.manual_check.setChecked(True)
     assert w.resolved_edit.text() == str(tmp_path / "manual")
     w.close()
@@ -93,7 +94,7 @@ def test_conversion_in_worker(app, make_exr_sequence, tmp_path):
     src = make_exr_sequence([1001, 1002, 1003], attrs={"colorInteropID": "lin_ap1_scene"})
     out = tmp_path / "out"
     w = MainWindow()
-    for edit, text in ((w.project_edit, "GOD"), (w.shot_edit, "0046_005"), (w.task_edit, "ml"),
+    for edit, text in ((w.project_edit, "PROJ"), (w.shot_edit, "0010_020"), (w.task_edit, "comp"),
                        (w.element_edit, "water"), (w.output_edit, str(out)), (w.input_edit, str(src))):
         edit.setText(text)
     w.manual_check.setChecked(True)
@@ -104,7 +105,7 @@ def test_conversion_in_worker(app, make_exr_sequence, tmp_path):
     assert "Conversion complete: 3 frames" in w.result_label.text()
     assert w.progress.value() == 3 and w.frame_label.text() == "3 / 3"
     assert w.open_report_btn.isEnabled() and not w.cancel_btn.isEnabled()
-    assert (out / "GOD_0046_005_ml_v001.conversion_report.json").is_file()
+    assert (out / "PROJ_0010_020_comp_v001.conversion_report.json").is_file()
     w.close()
 
 
@@ -114,7 +115,7 @@ def test_video_conversion_in_worker(app, make_video, tmp_path):
     src = make_video("clip.mov", frames=6)
     out = tmp_path / "out"
     w = MainWindow()
-    for edit, text in ((w.project_edit, "GOD"), (w.shot_edit, "0046_005"), (w.task_edit, "ml"),
+    for edit, text in ((w.project_edit, "PROJ"), (w.shot_edit, "0010_020"), (w.task_edit, "comp"),
                        (w.element_edit, "water"), (w.output_edit, str(out)), (w.input_edit, str(src))):
         edit.setText(text)
     w.manual_check.setChecked(True)
@@ -124,7 +125,7 @@ def test_video_conversion_in_worker(app, make_video, tmp_path):
     w.start_conversion()
     _wait(app, w)
     assert "Conversion complete: 6 frames" in w.result_label.text(), w.result_label.text()
-    assert len(list(out.glob("GOD_0046_005_ml_v001.*.exr"))) == 6
+    assert len(list(out.glob("PROJ_0010_020_comp_v001.*.exr"))) == 6
     w.close()
 
 
