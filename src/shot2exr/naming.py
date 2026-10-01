@@ -83,6 +83,11 @@ def output_pattern(basename: str) -> str:
     return f"{basename}.{'#' * config.FRAME_MIN_DIGITS}{config.EXR_EXTENSION}"
 
 
+def movie_filename(basename: str) -> str:
+    """``PROJ_0010_020_comp_v001`` -> ``PROJ_0010_020_comp_v001.mov`` (the review movie)."""
+    return f"{basename}{config.REVIEW_MOVIE_EXTENSION}"
+
+
 def report_filename(basename: str) -> str:
     return f"{basename}.conversion_report.json"
 

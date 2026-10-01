@@ -156,6 +156,25 @@ class ColorConfig:
             return None
         return proc.getOptimizedCPUProcessor(ocio.OPTIMIZATION_LOSSLESS)
 
+    def review_display_view(self) -> tuple[str, str]:
+        """Display and view used for the review movie: Rec.1886 Rec.709 if the config has it."""
+        displays = list(self._cfg.getDisplays())
+        display = app_config.REVIEW_MOVIE_DISPLAY if app_config.REVIEW_MOVIE_DISPLAY in displays else self._cfg.getDefaultDisplay()
+        return display, self._cfg.getDefaultView(display)
+
+    def display_processor(self, src: str) -> Any | None:
+        """CPU processor ``src`` -> review display/view; ``None`` for data spaces (shown as-is)."""
+        entry = self.entry(src)
+        if entry is not None and entry.is_data:
+            return None
+        ocio = _ocio()
+        display, view = self.review_display_view()
+        try:
+            transform = ocio.DisplayViewTransform(src=src, display=display, view=view)
+            return self._cfg.getProcessor(transform).getOptimizedCPUProcessor(ocio.OPTIMIZATION_LOSSLESS)
+        except Exception as exc:  # noqa: BLE001
+            raise ColorSpaceError(f"OCIO cannot build the review transform '{src}' -> {display} / {view}: {exc}") from None
+
     def describe(self) -> dict[str, Any]:
         return {
             "source": self.source,

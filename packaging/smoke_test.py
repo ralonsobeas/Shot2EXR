@@ -4,7 +4,7 @@ any Windows Python), so it can run on a clean machine with no conda env.
     python packaging/smoke_test.py dist/Shot2EXR [--gui offscreen|xcb|windows|skip]
 
 Steps: version, --check-environment (every core dependency must pass), a synthetic ProRes MOV made
-with the bundled FFmpeg, MOV -> EXR, that EXR sequence -> EXR (resized), error exit codes, and the
+with the bundled FFmpeg, MOV -> EXR (plus its ProRes review movie), that EXR sequence -> EXR (resized), error exit codes, and the
 GUI self-test. Exits non-zero on the first failure.
 """
 
@@ -98,6 +98,8 @@ def main() -> None:
         rep = json.loads(Path(result["report"]).read_text(encoding="utf-8"))
         if rep["input"]["frames_decoded"] != 24 or rep["general"]["status"] != "success":
             sys.exit("FAILED: video report is inconsistent")
+        if not (v1 / "PROJ_0010_020_comp_v001.mov").is_file() or rep["output"]["review_movie"]["frames"] != 24:
+            sys.exit("FAILED: the ProRes review movie is missing or incomplete")
 
         step("EXR sequence -> EXR (FILL resize to 256x256, ACEScg -> ACES2065-1)")
         res = run([cli, "-i", frames[0], *shot, "--version", "002", "--start-frame", "1009", "--resolution", "256x256",

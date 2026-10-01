@@ -164,6 +164,9 @@ user settings file is the same for both kinds of install:
 * Rocky Linux 9: `~/.config/shot2exr/settings.toml`
 * Windows: `%APPDATA%\Shot2EXR\settings.toml`
 
+Settings remembered per project + shot (resolution, colour spaces, ...) are kept next to it in
+`shot_history.json`. See the README ("Remembered settings per shot").
+
 ## Troubleshooting
 
 | Symptom | Fix |

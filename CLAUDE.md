@@ -19,6 +19,10 @@ Primary platform Rocky Linux 9, also Windows 10/11. Same codebase.
 - `settings.py` TOML settings (bundled `default_settings.toml` < user file / `$SHOT2EXR_SETTINGS`): per-OS
   `projects_root`, `[projects]` and `[tasks]` code -> folder maps. `output_paths.py` is the ONLY output-path
   builder (`resolve_output_location`), used by converter, CLI and GUI preview.
+- `review_movie.py`: ProRes 422 HQ review .mov fed rgb48 over stdin to FFmpeg; `ColorConfig.display_processor`
+  gives the Rec.709 display/view transform; `converter.review_rgb` works on a copy so EXR pixels are untouched.
+- `shot_memory.py`: per-user `shot_history.json` (`$SHOT2EXR_HISTORY`), keyed `PROJECT/SHOT`; saved by
+  `run_conversion` on success; recalled by `cli.apply_recalled_settings` and `MainWindow.recall_shot_settings`.
 - `resize.py` FIT/FILL/STRETCH geometry. `converter.py` = the engine: `inspect_source`,
   `plan_conversion`, `processing_steps` (shared by dry run and conversion), `run_conversion`.
 - `color_manager.ColorPipeline`: input -> resize space -> output processors. `report.py`: JSON report.
@@ -87,6 +91,8 @@ QT_QPA_PLATFORM=offscreen python -m pytest
 ```
 
 ## Status
+- Review movie + remembered shot settings: branch `review-movie-and-shot-memory` 2026-10-01. A .mov failure
+  fails the whole conversion (nothing kept). 202 tests pass in both Linux envs.
 - Milestone 4 (hardening + distribution): branch `milestone-4` (PR to main) 2026-10-01. 181 tests pass in both
   Linux envs. A PyInstaller bundle built on Ubuntu passed packaging/smoke_test.py locally (offscreen + xcb);
   real Rocky 9 / Windows bundle builds and clean-machine tests run only in CI (package-*/dist-* jobs).
@@ -109,4 +115,8 @@ QT_QPA_PLATFORM=offscreen python -m pytest
 - Video frame count: `nb_frames`, else exact packet count (`-count_packets`), else duration estimate (warned).
 - Rotation metadata, non-square pixels and interlacing are reported, not corrected (decode ignores rotation).
 - Video cancel is checked between frames; FFmpeg is killed on cancel/failure.
+- Review movie cost (4-core container, 2K, conda env): video 0.34 -> 0.76 s/frame. Most of it is the exact
+  ACES 2.0 view on CPU (~1.3 CPU-s per 2K frame, run in 16 strips on a thread pool). A baked 65^3 lut3d in
+  FFmpeg was ~4x cheaper but up to 0.14 off at gamut extremes, so it was not used. Random-noise EXR
+  benchmark frames are a ProRes worst case (~1.2 s/frame encode).
 - Linux bundle is ~480 MB unpacked (~175 MB tar.gz); conda-forge FFmpeg pulls in x265, OpenVINO, etc.

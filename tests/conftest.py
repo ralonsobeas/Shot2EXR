@@ -17,6 +17,7 @@ def isolated_settings(tmp_path, monkeypatch):
     path = tmp_path / "user_settings.toml"
     path.write_text('[projects]\nPROJ = "MyProject"\n\n[tasks]\ncomp = "Compositing"\n', encoding="utf-8")
     monkeypatch.setenv("SHOT2EXR_SETTINGS", str(path))
+    monkeypatch.setenv("SHOT2EXR_HISTORY", str(tmp_path / "shot_history.json"))
     return path
 
 

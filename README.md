@@ -1,7 +1,8 @@
 # Shot2EXR
 
 Converts a MOV/MP4 video or an existing EXR sequence into a correctly named, OCIO-converted
-EXR sequence (`PROJECT_SHOT_TASK_vVVV.FRAME.exr`) plus a JSON conversion report.
+EXR sequence (`PROJECT_SHOT_TASK_vVVV.FRAME.exr`), a ProRes review movie (`PROJECT_SHOT_TASK_vVVV.mov`) and a
+JSON conversion report.
 One engine, two front ends: a PySide6 GUI (`shot2exr-gui`) and a CLI (`shot2exr`).
 
 > **Status: Milestone 4.** EXR sequence -> EXR and MOV/MP4 -> EXR conversion work end to end in GUI
@@ -78,7 +79,7 @@ shot2exr --input "/source/clip.mov" --project PROJ --shot 0010_020 --task comp -
   --input-colorspace auto --output-colorspace ACEScg --dry-run
 ```
 
-Other options: `--projects-root`, `--output-dir`, `--settings`, `--ocio-config`, `--resize-mode fit|fill|stretch`, `--overwrite`,
+Other options: `--projects-root`, `--output-dir`, `--settings`, `--ocio-config`, `--resize-mode fit|fill|stretch`, `--overwrite`, `--no-recall`,
 `--accept-inferred-colorspace`, `--ffmpeg-path`, `--ffprobe-path`, `--list-colorspaces`,
 `--env-info`, `--check-environment`, `--json` (machine-readable output). On Windows PowerShell use a backtick `` ` ``
 instead of `\` for line continuation.
@@ -100,6 +101,41 @@ un-premultiplied around colour transforms) -> half-float ZIP EXR with `colorInte
 *output* space. Frames are written to a hidden staging folder and moved into place only after all of them are
 written and validated, then `PROJECT_SHOT_TASK_vVVV.conversion_report.json` is written. A failed or cancelled run
 removes its partial frames and leaves `...conversion_report.FAILED.json` / `.CANCELLED.json` instead.
+
+### Review movie
+
+Every conversion also writes `PROJECT_SHOT_TASK_vVVV.mov` in the same version folder. It is a **review proxy
+only**, never pipeline data: the EXRs are the deliverable and are never touched by the review transform.
+
+* Codec: ProRes 422 HQ (FFmpeg `prores_ks`, 10-bit 4:2:2), tagged BT.709. Odd sizes are padded by one pixel.
+* Look: OCIO display/view transform from the output colour space to *Rec.1886 Rec.709 - Display* with the
+  config's default view (falls back to the config's default display). Data spaces are shown as-is. Alpha is
+  not kept: premultiplied frames appear composited over black.
+* Frame rate: the source's for video input; 24 fps for EXR input (the dry run warns).
+* It is encoded alongside the frames, inside the same staging folder, and its frame count and size are checked
+  with FFprobe. If it fails, the whole conversion fails and no frames are kept. An existing `.mov` counts as an
+  output collision (overwrite protection), and a dry run only shows its planned name.
+* The report's `output.review_movie` block records the file, codec, fps (and where it came from), display,
+  view and frame count.
+
+### Remembered settings per shot
+
+After a successful conversion (GUI or CLI), the resolution, resize mode, input and output colour spaces and
+OCIO config are saved for that project + shot. The next conversion of the same shot, with any task, starts
+from them. Element, version and start frame are never remembered.
+
+* CLI: options you leave out come from memory (a note on stderr lists them); options you pass always win.
+  `--no-recall` ignores the memory for one run. With a remembered resolution, `--resolution` can be omitted.
+* GUI: typing a known project + shot fills those fields and shows a note under *Shot information*. Fields
+  you changed by hand just before are kept.
+* The file is per user (never in the repository or the project folders); `$SHOT2EXR_HISTORY` overrides it:
+
+| OS | Remembered settings file |
+|---|---|
+| Rocky Linux 9 | `~/.config/shot2exr/shot_history.json` (or `$XDG_CONFIG_HOME/shot2exr/shot_history.json`) |
+| Windows | `%APPDATA%\Shot2EXR\shot_history.json` |
+
+Delete the file (or an entry in it) to forget remembered settings.
 
 ## Colour management
 

@@ -26,3 +26,9 @@ EXR_PIXEL_TYPE = "half"
 EXR_COMPRESSION = "zip"
 
 FFPROBE_TIMEOUT_S = 120
+
+# Review movie (always written next to the EXRs; a display-referred proxy, never pipeline data)
+REVIEW_MOVIE_EXTENSION = ".mov"
+REVIEW_MOVIE_CODEC = "ProRes 422 HQ (prores_ks, 10-bit 4:2:2, BT.709 tags)"
+REVIEW_MOVIE_DISPLAY = "Rec.1886 Rec.709 - Display"  # falls back to the config's default display
+REVIEW_MOVIE_DEFAULT_FPS = "24"  # EXR input has no frame rate

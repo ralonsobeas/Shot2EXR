@@ -72,7 +72,8 @@ def test_identity_preserves_values_names_and_report(ocio_cfg, source, tmp_path):
     plan, res = convert(ocio_cfg, source(3), out)
     assert res.ok and res.frames_written == 3
     names = sorted(p.name for p in out.iterdir())
-    assert names == [f"{BASE}.1009.exr", f"{BASE}.1010.exr", f"{BASE}.1011.exr", f"{BASE}.conversion_report.json"]
+    assert names == [f"{BASE}.1009.exr", f"{BASE}.1010.exr", f"{BASE}.1011.exr", f"{BASE}.conversion_report.json",
+                     f"{BASE}.mov"]
     src_px = pixels(tmp_path / "src" / "plate.1001.exr")
     out_px = pixels(out / f"{BASE}.1009.exr")
     np.testing.assert_allclose(out_px, src_px, rtol=1e-3, atol=1e-3)  # half precision
@@ -145,7 +146,7 @@ def test_overwrite_protection_and_overwrite(ocio_cfg, source, tmp_path):
     req = dict(input_path=src, project="PROJ", shot="0010_020", task="comp", version="001", start_frame=1009,
                output_resolution=Resolution(48, 27), element="water", output_directory=out)
     plan = plan_conversion(ConversionRequest(**req), ocio_cfg)
-    assert plan.exit_code is ExitCode.OUTPUT and len(plan.collisions) == 3
+    assert plan.exit_code is ExitCode.OUTPUT and len(plan.collisions) == 4
     with pytest.raises(Shot2EXRError):
         run_conversion(plan, ocio_cfg)
     _, res = convert(ocio_cfg, src, out, overwrite=True, output_colorspace="ACES2065-1")
@@ -209,5 +210,5 @@ def test_auto_directory_created_only_on_success(ocio_cfg, source, tmp_path):
     assert not vdir.exists()
     res = run_conversion(plan, ocio_cfg)
     assert res.ok and res.output_directory == vdir
-    assert sorted(p.name for p in vdir.iterdir())[-1] == "PROJ_0010_020_comp_v003.conversion_report.json"
+    assert "PROJ_0010_020_comp_v003.conversion_report.json" in {p.name for p in vdir.iterdir()}
     assert json.loads(res.report_path.read_text())["output"]["projects_root"] == str(root)
