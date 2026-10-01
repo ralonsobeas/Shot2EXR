@@ -8,8 +8,9 @@ on: [push, pull_request]
 env:
   # Desktop libraries the GUI needs on Rocky 9 (documented in INSTALL.md; keep both in sync).
   ROCKY9_GUI_PACKAGES: >-
-    libglvnd-opengl libglvnd-egl libglvnd-glx mesa-libGL mesa-libEGL fontconfig libxkbcommon-x11
+    libglvnd-opengl libglvnd-egl libglvnd-glx mesa-libGL mesa-libEGL fontconfig libxcb libxkbcommon-x11
     xcb-util-cursor xcb-util-wm xcb-util-keysyms xcb-util-renderutil xcb-util-image
+    libwayland-client libwayland-cursor libwayland-egl
 
 jobs:
   rocky9:

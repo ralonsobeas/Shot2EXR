@@ -133,6 +133,15 @@ def _version_tuple(text: str) -> tuple[int, ...] | None:
     return (int(m.group(1)), int(m.group(2))) if m else None
 
 
+def _version_line(exe: Path) -> str:
+    """First line of ``exe -version``; RuntimeError with stderr when it cannot start (e.g. a missing library)."""
+    proc = _run([str(exe), "-hide_banner", "-version"], text=True)
+    lines = proc.stdout.splitlines()
+    if proc.returncode or not lines:
+        raise RuntimeError((proc.stderr or "").strip()[:300] or f"exit code {proc.returncode}")
+    return lines[0].split(" Copyright")[0]
+
+
 def check_ffmpeg(ffmpeg_path: str | None = None) -> Check:
     from shot2exr.media_probe import resolve_executable
     from shot2exr.video_reader import SWS_FLAGS
@@ -142,7 +151,7 @@ def check_ffmpeg(ffmpeg_path: str | None = None) -> Check:
     except Shot2EXRError as exc:
         return Check("FFmpeg", FAIL, exc.message)
     try:
-        head = _run([str(exe), "-hide_banner", "-version"], text=True).stdout.splitlines()[0].split(" Copyright")[0]
+        head = _version_line(exe)
         version = _version_tuple(head)
         if version and version < MIN_FFMPEG:
             return Check("FFmpeg", FAIL, f"{head} at {exe}: {'.'.join(map(str, MIN_FFMPEG))} or newer is required")
@@ -160,7 +169,7 @@ def check_ffmpeg(ffmpeg_path: str | None = None) -> Check:
         if dec.returncode or len(dec.stdout) != expected:
             err = dec.stderr.decode(errors="replace").strip()[:300]
             return Check("FFmpeg", FAIL, f"{head} at {exe}: 16-bit RGB decode test failed ({err or len(dec.stdout)})")
-    except (OSError, subprocess.SubprocessError, IndexError) as exc:
+    except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
         return Check("FFmpeg", FAIL, f"{exe} could not run: {exc}")
     return Check("FFmpeg", OK, f"{head.replace('ffmpeg version ', '')} at {exe}, 16-bit RGB decode OK")
 
@@ -170,10 +179,10 @@ def check_ffprobe(ffprobe_path: str | None = None) -> Check:
 
     try:
         exe = resolve_executable("ffprobe", ffprobe_path)
-        head = _run([str(exe), "-hide_banner", "-version"], text=True).stdout.splitlines()[0].split(" Copyright")[0]
+        head = _version_line(exe)
     except Shot2EXRError as exc:
         return Check("FFprobe", FAIL, exc.message)
-    except (OSError, subprocess.SubprocessError, IndexError) as exc:
+    except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
         return Check("FFprobe", FAIL, f"could not run: {exc}")
     return Check("FFprobe", OK, f"{head.replace('ffprobe version ', '')} at {exe}")
 
@@ -184,8 +193,9 @@ def _platform_plugin(plugins: Path) -> Path | None:
     return plugin if plugin.is_file() else None
 
 
-LINUX_GUI_PACKAGES = ("libglvnd-opengl libglvnd-egl libglvnd-glx mesa-libGL mesa-libEGL fontconfig "
-                      "libxkbcommon-x11 xcb-util-cursor xcb-util-wm xcb-util-keysyms xcb-util-renderutil xcb-util-image")
+LINUX_GUI_PACKAGES = ("libglvnd-opengl libglvnd-egl libglvnd-glx mesa-libGL mesa-libEGL fontconfig libxcb "
+                      "libxkbcommon-x11 xcb-util-cursor xcb-util-wm xcb-util-keysyms xcb-util-renderutil xcb-util-image "
+                      "libwayland-client libwayland-cursor libwayland-egl")
 
 
 def missing_library_hint() -> str:

@@ -51,8 +51,9 @@ deliberately not bundled. A normal Rocky 9 workstation install ("Server with GUI
 "Workstation") already has them. On a minimal install, ask an admin to run:
 
 ```bash
-sudo dnf install libglvnd-opengl libglvnd-egl libglvnd-glx mesa-libGL mesa-libEGL fontconfig \
-    libxkbcommon-x11 xcb-util-cursor xcb-util-wm xcb-util-keysyms xcb-util-renderutil xcb-util-image
+sudo dnf install libglvnd-opengl libglvnd-egl libglvnd-glx mesa-libGL mesa-libEGL fontconfig libxcb \
+    libxkbcommon-x11 xcb-util-cursor xcb-util-wm xcb-util-keysyms xcb-util-renderutil xcb-util-image \
+    libwayland-client libwayland-cursor libwayland-egl
 ```
 
 This is the same list the `package-rocky9` CI job installs on a clean `rockylinux:9` container
